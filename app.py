@@ -112,9 +112,16 @@ end_date_dt = datetime.combine(end_date, datetime.min.time())
 if st.button("Run Analysis"):
     with st.spinner(f"Fetching data for {symbol}..."):
         df = fetch_historical_df(symbol, start_date_dt, end_date_dt)
-    
+        
+        # Fallback: last 1 year if no data for selected range
+        if df is None:
+            fallback_start = end_date_dt - timedelta(days=365)
+            df = fetch_historical_df(symbol, fallback_start, end_date_dt)
+            if df is not None:
+                st.info(f"No data for selected range. Showing last 1 year for {symbol}.")
+        
     if df is None or df.empty:
-        st.error(f"No valid historical data available for {symbol}. Try another date range or symbol.")
+        st.error(f"No valid historical data available for {symbol}. Try another symbol.")
     else:
         df = add_technical_indicators(df)
         fundamentals = fetch_fundamentals(symbol)
