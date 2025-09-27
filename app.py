@@ -1,7 +1,7 @@
 # app.py
 import streamlit as st
 import pandas as pd
-import yfinance as yf
+from alpha_vantage.timeseries import TimeSeries
 import ta
 from datetime import datetime, timedelta
 import warnings
@@ -9,68 +9,37 @@ import warnings
 warnings.filterwarnings("ignore")
 st.set_page_config(page_title="Live Stock Analysis", layout="wide")
 
+# ---- Alpha Vantage API Key ----
+API_KEY = "YOUR_ALPHA_VANTAGE_API_KEY"  # Replace with your key
+
 # ---- Fetch Historical Data ----
 @st.cache_data(ttl=300)
 def fetch_historical_df(symbol, start_date, end_date):
-    """
-    Fetch historical OHLCV data for a stock symbol.
-    Handles empty/malformed data and MultiIndex columns from Yahoo Finance.
-    """
-    # Ensure end_date > start_date
-    if end_date <= start_date:
-        start_date = end_date - timedelta(days=365)
-
-    df = yf.download(symbol + ".NS", start=start_date, end=end_date, interval="1d")
-    if df.empty:
-        return None
-
-    df = df.reset_index()
-
-    # Flatten MultiIndex columns if any
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in df.columns]
-
-    # Normalize column names
-    df.rename(columns=lambda x: x.lower().replace(' ', ''), inplace=True)
-
-    # Standard column mapping
-    col_map = {
-        'date': 'date',
-        'open': 'open',
-        'high': 'high',
-        'low': 'low',
-        'adjclose': 'close',
-        'close': 'close',
-        'volume': 'volume'
-    }
-    df.rename(columns={k: v for k, v in col_map.items() if k in df.columns}, inplace=True)
-
-    # Ensure 'close' exists
-    if 'close' not in df.columns:
-        df['close'] = pd.NA
-
-    # Add openinterest
-    df['openinterest'] = 0
-
-    # Ensure date is datetime
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    else:
-        df['date'] = pd.NaT
-
-    # Safe numeric conversion
-    numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'openinterest']
-    for col in numeric_cols:
-        if col in df.columns and isinstance(df[col], pd.Series):
+    ts = TimeSeries(key=API_KEY, output_format='pandas')
+    try:
+        # Fetch daily adjusted data
+        df, meta = ts.get_daily_adjusted(symbol=symbol + ".NS", outputsize='full')
+        df = df.reset_index().rename(columns={
+            'date': 'date',
+            '1. open': 'open',
+            '2. high': 'high',
+            '3. low': 'low',
+            '4. close': 'close',
+            '6. volume': 'volume'
+        })
+        df['date'] = pd.to_datetime(df['date'])
+        # Filter by date range
+        df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+        if df.empty:
+            return None
+        df['openinterest'] = 0
+        numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'openinterest']
+        for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-        else:
-            df[col] = pd.NA
-
-    # Return only if at least one valid row exists
-    if df['close'].isna().all():
+        return df[['date','open','high','low','close','volume','openinterest']]
+    except Exception as e:
+        st.error(f"Error fetching data from Alpha Vantage: {e}")
         return None
-
-    return df[['date', 'open', 'high', 'low', 'close', 'volume', 'openinterest']]
 
 # ---- Technical Indicators ----
 def add_technical_indicators(df):
@@ -86,77 +55,37 @@ def add_technical_indicators(df):
     df['bb_low'] = bollinger.bollinger_lband()
     return df
 
-# ---- Fundamentals ----
-@st.cache_data(ttl=3600)
-def fetch_fundamentals(symbol):
-    info = yf.Ticker(symbol + ".NS").info
-    return {
-        'P/E Ratio': info.get('trailingPE'),
-        'EPS': info.get('trailingEps'),
-        'ROE (%)': info.get('returnOnEquity'),
-        'Debt-to-Equity': info.get('debtToEquity'),
-        'Dividend Yield': info.get('dividendYield')
-    }
-
 # ---- Streamlit UI ----
-st.title("📈 Live Stock Analysis & Recommendation")
+st.title("📈 Live Stock Analysis & Recommendation (Alpha Vantage)")
 
-symbol = st.text_input("Enter Stock Symbol:", "TCS").upper()
+symbol = st.text_input("Enter NSE Stock Symbol:", "TCS").upper()
 start_date = st.date_input("Start Date", datetime(2022,1,1))
 end_date = datetime.today() - timedelta(days=1)
 
-# Convert to datetime.datetime for safe comparison and yf.download
 start_date_dt = datetime.combine(start_date, datetime.min.time())
 end_date_dt = datetime.combine(end_date, datetime.min.time())
 
 if st.button("Run Analysis"):
-    with st.spinner(f"Fetching data for {symbol}..."):
+    with st.spinner(f"Fetching data for {symbol} from Alpha Vantage..."):
         df = fetch_historical_df(symbol, start_date_dt, end_date_dt)
-        
-        # Fallback: last 1 year if no data for selected range
-        if df is None:
-            fallback_start = end_date_dt - timedelta(days=365)
-            df = fetch_historical_df(symbol, fallback_start, end_date_dt)
-            if df is not None:
-                st.info(f"No data for selected range. Showing last 1 year for {symbol}.")
-        
+    
     if df is None or df.empty:
-        st.error(f"No valid historical data available for {symbol}. Try another symbol.")
+        st.error(f"No valid historical data available for {symbol}.")
     else:
         df = add_technical_indicators(df)
-        fundamentals = fetch_fundamentals(symbol)
-        
-        # Defensive: check if latest row exists
-        if not df.empty:
-            latest = df.iloc[-1]
+        latest = df.iloc[-1]
 
-            # ---- Recommendation Logic ----
-            score = 0
-            score += 2 if latest.get('fast_ma', 0) > latest.get('slow_ma', 0) else -2
-            score += 1 if latest.get('rsi', 50) < 30 else (-1 if latest.get('rsi',50) > 70 else 0)
-            score += 1 if latest.get('macd',0) > latest.get('macd_signal',0) else -1
-            score += 1 if latest.get('close',0) < latest.get('bb_low',0) else (-1 if latest.get('close',0) > latest.get('bb_high',0) else 0)
-            
-            pe_ratio = fundamentals.get('P/E Ratio')
-            if pe_ratio is not None:
-                 score += 1 if pe_ratio < 20 else (-1 if pe_ratio > 25 else 0)
+        # ---- Recommendation Logic ----
+        score = 0
+        score += 2 if latest.get('fast_ma',0) > latest.get('slow_ma',0) else -2
+        score += 1 if latest.get('rsi',50) < 30 else (-1 if latest.get('rsi',50) > 70 else 0)
+        score += 1 if latest.get('macd',0) > latest.get('macd_signal',0) else -1
+        score += 1 if latest.get('close',0) < latest.get('bb_low',0) else (-1 if latest.get('close',0) > latest.get('bb_high',0) else 0)
+        recommendation = "STRONG BUY" if score >= 4 else "BUY" if score >= 2 else "HOLD" if score > -2 else "SELL" if score > -4 else "STRONG SELL"
 
-            recommendation = "STRONG BUY" if score >= 4 else "BUY" if score >= 2 else "HOLD" if score > -2 else "SELL" if score > -4 else "STRONG SELL"
-
-            # ---- Display Data ----
-            latest_date = latest.get('date')
-            if pd.isna(latest_date):
-                date_str = "N/A"
-            else:
-                date_str = latest_date.strftime('%Y-%m-%d')
-
-            st.subheader(f"📊 Latest Data for {symbol} ({date_str})")
-            st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
-            
-            st.subheader("🏦 Fundamental Metrics")
-            valid_fundamentals = {k: v for k, v in fundamentals.items() if v is not None}
-            st.table(pd.DataFrame([valid_fundamentals]))
-            
-            st.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
-        else:
-            st.warning("No valid rows found in historical data.")
+        # ---- Display Data ----
+        latest_date = latest.get('date')
+        date_str = latest_date.strftime('%Y-%m-%d') if pd.notna(latest_date) else "N/A"
+        st.subheader(f"📊 Latest Data for {symbol} ({date_str})")
+        st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
+        st.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
