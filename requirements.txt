@@ -1,4 +1,5 @@
 streamlit
 pandas
 yfinance
+alpha_vantage
 ta
