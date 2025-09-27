@@ -12,6 +12,10 @@ st.set_page_config(page_title="Live Stock Analysis", layout="wide")
 # ---- Fetch Historical Data ----
 @st.cache_data(ttl=300)
 def fetch_historical_df(symbol, start_date, end_date):
+    """
+    Fetch historical OHLCV data for a stock symbol.
+    Handles empty/malformed data and MultiIndex columns from Yahoo Finance.
+    """
     # Ensure end_date > start_date
     if end_date <= start_date:
         start_date = end_date - timedelta(days=365)
@@ -35,7 +39,7 @@ def fetch_historical_df(symbol, start_date, end_date):
         'open': 'open',
         'high': 'high',
         'low': 'low',
-        'adjclose': 'close',  # adjusted close if available
+        'adjclose': 'close',
         'close': 'close',
         'volume': 'volume'
     }
@@ -101,9 +105,13 @@ symbol = st.text_input("Enter Stock Symbol:", "TCS").upper()
 start_date = st.date_input("Start Date", datetime(2022,1,1))
 end_date = datetime.today() - timedelta(days=1)
 
+# Convert to datetime.datetime for safe comparison and yf.download
+start_date_dt = datetime.combine(start_date, datetime.min.time())
+end_date_dt = datetime.combine(end_date, datetime.min.time())
+
 if st.button("Run Analysis"):
     with st.spinner(f"Fetching data for {symbol}..."):
-        df = fetch_historical_df(symbol, start_date, end_date)
+        df = fetch_historical_df(symbol, start_date_dt, end_date_dt)
     
     if df is None or df.empty:
         st.error(f"No valid historical data available for {symbol}. Try another date range or symbol.")
