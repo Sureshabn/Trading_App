@@ -12,24 +12,26 @@ st.set_page_config(page_title="Live Stock Analysis", layout="wide")
 # ---- Fetch Historical Data ----
 @st.cache_data(ttl=300)
 def fetch_historical_df(symbol, start_date, end_date):
-    # Download historical data
     df = yf.download(symbol + ".NS", start=start_date, end=end_date, interval="1d")
     if df.empty:
         return None
 
-    # Reset index to get 'Date' as a column
     df = df.reset_index()
 
-    # Normalize column names: lowercase, remove spaces
+    # Flatten MultiIndex columns if any
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in df.columns]
+
+    # Normalize column names
     df.rename(columns=lambda x: x.lower().replace(' ', ''), inplace=True)
 
-    # Map standard columns
+    # Standard column mapping
     col_map = {
         'date': 'date',
         'open': 'open',
         'high': 'high',
         'low': 'low',
-        'adjclose': 'close',
+        'adjclose': 'close',  # adjusted close if available
         'close': 'close',
         'volume': 'volume'
     }
@@ -42,14 +44,19 @@ def fetch_historical_df(symbol, start_date, end_date):
     # Add openinterest
     df['openinterest'] = 0
 
-    # Convert date column to datetime
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    # Ensure date is datetime
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    else:
+        df['date'] = pd.NaT
 
-    # Convert numeric columns safely
+    # Safe numeric conversion
     numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'openinterest']
     for col in numeric_cols:
-        if col in df.columns:
+        if col in df.columns and isinstance(df[col], pd.Series):
             df[col] = pd.to_numeric(df[col], errors='coerce')
+        else:
+            df[col] = pd.NA
 
     return df[['date', 'open', 'high', 'low', 'close', 'volume', 'openinterest']]
 
@@ -95,27 +102,32 @@ if st.button("Run Analysis"):
     else:
         df = add_technical_indicators(df)
         fundamentals = fetch_fundamentals(symbol)
-        latest = df.iloc[-1]
-
-        # ---- Recommendation Logic ----
-        score = 0
-        score += 2 if latest['fast_ma'] > latest['slow_ma'] else -2
-        score += 1 if latest['rsi'] < 30 else (-1 if latest['rsi'] > 70 else 0)
-        score += 1 if latest['macd'] > latest['macd_signal'] else -1
-        score += 1 if latest['close'] < latest['bb_low'] else (-1 if latest['close'] > latest['bb_high'] else 0)
         
-        pe_ratio = fundamentals.get('P/E Ratio')
-        if pe_ratio is not None:
-             score += 1 if pe_ratio < 20 else (-1 if pe_ratio > 25 else 0)
+        # Defensive: check if latest row exists
+        if not df.empty:
+            latest = df.iloc[-1]
 
-        recommendation = "STRONG BUY" if score >= 4 else "BUY" if score >= 2 else "HOLD" if score > -2 else "SELL" if score > -4 else "STRONG SELL"
+            # ---- Recommendation Logic ----
+            score = 0
+            score += 2 if latest.get('fast_ma', 0) > latest.get('slow_ma', 0) else -2
+            score += 1 if latest.get('rsi', 50) < 30 else (-1 if latest.get('rsi',50) > 70 else 0)
+            score += 1 if latest.get('macd',0) > latest.get('macd_signal',0) else -1
+            score += 1 if latest.get('close',0) < latest.get('bb_low',0) else (-1 if latest.get('close',0) > latest.get('bb_high',0) else 0)
+            
+            pe_ratio = fundamentals.get('P/E Ratio')
+            if pe_ratio is not None:
+                 score += 1 if pe_ratio < 20 else (-1 if pe_ratio > 25 else 0)
 
-        # ---- Display Data ----
-        st.subheader(f"📊 Latest Data for {symbol} ({latest['date'].strftime('%Y-%m-%d')})")
-        st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
-        
-        st.subheader("🏦 Fundamental Metrics")
-        valid_fundamentals = {k: v for k, v in fundamentals.items() if v is not None}
-        st.table(pd.DataFrame([valid_fundamentals]))
-        
-        st.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
+            recommendation = "STRONG BUY" if score >= 4 else "BUY" if score >= 2 else "HOLD" if score > -2 else "SELL" if score > -4 else "STRONG SELL"
+
+            # ---- Display Data ----
+            st.subheader(f"📊 Latest Data for {symbol} ({latest['date'].strftime('%Y-%m-%d')})")
+            st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
+            
+            st.subheader("🏦 Fundamental Metrics")
+            valid_fundamentals = {k: v for k, v in fundamentals.items() if v is not None}
+            st.table(pd.DataFrame([valid_fundamentals]))
+            
+            st.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
+        else:
+            st.warning("No valid rows found in historical data.")
