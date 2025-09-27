@@ -12,6 +12,10 @@ st.set_page_config(page_title="Live Stock Analysis", layout="wide")
 # ---- Fetch Historical Data ----
 @st.cache_data(ttl=300)
 def fetch_historical_df(symbol, start_date, end_date):
+    # Ensure end_date > start_date
+    if end_date <= start_date:
+        start_date = end_date - timedelta(days=365)
+
     df = yf.download(symbol + ".NS", start=start_date, end=end_date, interval="1d")
     if df.empty:
         return None
@@ -31,7 +35,7 @@ def fetch_historical_df(symbol, start_date, end_date):
         'open': 'open',
         'high': 'high',
         'low': 'low',
-        'adjclose': 'close',
+        'adjclose': 'close',  # adjusted close if available
         'close': 'close',
         'volume': 'volume'
     }
@@ -57,6 +61,10 @@ def fetch_historical_df(symbol, start_date, end_date):
             df[col] = pd.to_numeric(df[col], errors='coerce')
         else:
             df[col] = pd.NA
+
+    # Return only if at least one valid row exists
+    if df['close'].isna().all():
+        return None
 
     return df[['date', 'open', 'high', 'low', 'close', 'volume', 'openinterest']]
 
@@ -98,7 +106,7 @@ if st.button("Run Analysis"):
         df = fetch_historical_df(symbol, start_date, end_date)
     
     if df is None or df.empty:
-        st.error(f"No historical data available for {symbol}.")
+        st.error(f"No valid historical data available for {symbol}. Try another date range or symbol.")
     else:
         df = add_technical_indicators(df)
         fundamentals = fetch_fundamentals(symbol)
