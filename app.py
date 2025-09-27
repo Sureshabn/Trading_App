@@ -31,7 +31,7 @@ def fetch_historical_df(symbol, start_date, end_date):
         'open': 'open',
         'high': 'high',
         'low': 'low',
-        'adjclose': 'close',  # adjusted close if available
+        'adjclose': 'close',
         'close': 'close',
         'volume': 'volume'
     }
@@ -121,7 +121,13 @@ if st.button("Run Analysis"):
             recommendation = "STRONG BUY" if score >= 4 else "BUY" if score >= 2 else "HOLD" if score > -2 else "SELL" if score > -4 else "STRONG SELL"
 
             # ---- Display Data ----
-            st.subheader(f"📊 Latest Data for {symbol} ({latest['date'].strftime('%Y-%m-%d')})")
+            latest_date = latest.get('date')
+            if pd.isna(latest_date):
+                date_str = "N/A"
+            else:
+                date_str = latest_date.strftime('%Y-%m-%d')
+
+            st.subheader(f"📊 Latest Data for {symbol} ({date_str})")
             st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
             
             st.subheader("🏦 Fundamental Metrics")
