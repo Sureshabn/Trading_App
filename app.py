@@ -15,30 +15,22 @@ def fetch_historical_df(symbol, start_date, end_date):
     df = yf.download(symbol + ".NS", start=start_date, end=end_date, interval="1d")
     if df.empty:
         return None
-        
     df = df.reset_index()
     
-    # --- ROBUST FIX APPLIED HERE ---
-    # 1. Define the columns we want to keep (using 'Adj Close' for the final 'close')
-    required_cols = ["Date", "Open", "High", "Low", "Adj Close", "Volume"]
+    # --- FIX APPLIED HERE ---
+    # We map 'Adj Close' to 'close' and avoid mapping the original 'Close' to 'close'
+    df.rename(columns={"Date":"date","Open":"open","High":"high","Low":"low",
+                       "Adj Close":"close","Volume":"volume"}, inplace=True)
     
-    # 2. Filter the DataFrame to ensure only these columns remain
-    # This prevents the issue of having both 'Close' and 'Adj Close' simultaneously
-    if all(col in df.columns for col in required_cols):
-        df = df[required_cols]
-    else:
-        # Fallback in case of missing columns, though unlikely for standard stocks
-        return None 
-
-    # 3. Rename the columns to your standard format
-    df.rename(columns={"Date":"date", "Open":"open", "High":"high", "Low":"low",
-                       "Adj Close":"close", "Volume":"volume"}, inplace=True)
+    # Drop the original 'Close' column if it exists, as it is now redundant
+    if 'Close' in df.columns:
+        df = df.drop(columns=['Close'])
     # --- END FIX ---
     
     df["openinterest"] = 0
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
     
-    # This loop is now safe because 'close' is guaranteed to be a single Series
+    # The list below now correctly refers to single columns
     numeric_cols = ['open','high','low','close','volume','openinterest']
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -85,7 +77,7 @@ if st.button("Run Analysis"):
         df = fetch_historical_df(symbol, start_date, end_date)
     
     if df is None or df.empty:
-        st.error(f"No historical data available for {symbol}. Please check the symbol and dates.")
+        st.error(f"No historical data available for {symbol}.")
     else:
         df = add_technical_indicators(df)
         fundamentals = fetch_fundamentals(symbol)
