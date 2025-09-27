@@ -5,37 +5,53 @@ import yfinance as yf
 import ta
 from datetime import datetime, timedelta
 import warnings
-warnings.filterwarnings("ignore")
 
+warnings.filterwarnings("ignore")
 st.set_page_config(page_title="Live Stock Analysis", layout="wide")
 
 # ---- Fetch Historical Data ----
 @st.cache_data(ttl=300)
 def fetch_historical_df(symbol, start_date, end_date):
+    # Download historical data
     df = yf.download(symbol + ".NS", start=start_date, end=end_date, interval="1d")
     if df.empty:
         return None
+
+    # Reset index to get 'Date' as a column
     df = df.reset_index()
-    
-    # --- FIX APPLIED HERE ---
-    # We map 'Adj Close' to 'close' and avoid mapping the original 'Close' to 'close'
-    df.rename(columns={"Date":"date","Open":"open","High":"high","Low":"low",
-                       "Adj Close":"close","Volume":"volume"}, inplace=True)
-    
-    # Drop the original 'Close' column if it exists, as it is now redundant
-    if 'Close' in df.columns:
-        df = df.drop(columns=['Close'])
-    # --- END FIX ---
-    
-    df["openinterest"] = 0
+
+    # Normalize column names: lowercase, remove spaces
+    df.rename(columns=lambda x: x.lower().replace(' ', ''), inplace=True)
+
+    # Map standard columns
+    col_map = {
+        'date': 'date',
+        'open': 'open',
+        'high': 'high',
+        'low': 'low',
+        'adjclose': 'close',
+        'close': 'close',
+        'volume': 'volume'
+    }
+    df.rename(columns={k: v for k, v in col_map.items() if k in df.columns}, inplace=True)
+
+    # Ensure 'close' exists
+    if 'close' not in df.columns:
+        df['close'] = pd.NA
+
+    # Add openinterest
+    df['openinterest'] = 0
+
+    # Convert date column to datetime
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    
-    # The list below now correctly refers to single columns
-    numeric_cols = ['open','high','low','close','volume','openinterest']
+
+    # Convert numeric columns safely
+    numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'openinterest']
     for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-    return df[['date','open','high','low','close','volume','openinterest']]
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    return df[['date', 'open', 'high', 'low', 'close', 'volume', 'openinterest']]
 
 # ---- Technical Indicators ----
 def add_technical_indicators(df):
@@ -55,7 +71,6 @@ def add_technical_indicators(df):
 @st.cache_data(ttl=3600)
 def fetch_fundamentals(symbol):
     info = yf.Ticker(symbol + ".NS").info
-    # Handle cases where some fundamentals might be missing
     return {
         'P/E Ratio': info.get('trailingPE'),
         'EPS': info.get('trailingEps'),
@@ -67,7 +82,6 @@ def fetch_fundamentals(symbol):
 # ---- Streamlit UI ----
 st.title("📈 Live Stock Analysis & Recommendation")
 
-# Default symbol for the Indian market
 symbol = st.text_input("Enter Stock Symbol:", "TCS").upper()
 start_date = st.date_input("Start Date", datetime(2022,1,1))
 end_date = datetime.today() - timedelta(days=1)
@@ -90,7 +104,6 @@ if st.button("Run Analysis"):
         score += 1 if latest['macd'] > latest['macd_signal'] else -1
         score += 1 if latest['close'] < latest['bb_low'] else (-1 if latest['close'] > latest['bb_high'] else 0)
         
-        # Check if P/E Ratio is valid before scoring
         pe_ratio = fundamentals.get('P/E Ratio')
         if pe_ratio is not None:
              score += 1 if pe_ratio < 20 else (-1 if pe_ratio > 25 else 0)
@@ -102,7 +115,6 @@ if st.button("Run Analysis"):
         st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
         
         st.subheader("🏦 Fundamental Metrics")
-        # Ensure only valid fundamentals are displayed
         valid_fundamentals = {k: v for k, v in fundamentals.items() if v is not None}
         st.table(pd.DataFrame([valid_fundamentals]))
         
