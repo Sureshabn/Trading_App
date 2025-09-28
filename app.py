@@ -7,7 +7,7 @@ from datetime import datetime, date, timedelta
 import plotly.graph_objects as go
 import time
 
-st.set_page_config(page_title="Zerodha Live Stock Analysis", layout="wide")
+st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
 st.title("📈 Zerodha Live Stock Analysis & Recommendation")
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
@@ -49,101 +49,156 @@ if st.session_state["access_token"]:
     st.subheader("📊 Stock Analysis")
 
     symbol = st.text_input("Enter NSE Stock Symbol:", "TCS").upper()
-    refresh_interval = st.slider("Refresh interval (seconds)", 30, 300, 60)
+    start_date = st.date_input("Start Date", datetime(2022,1,1))
+    end_date = st.date_input("End Date", datetime.today())
+    refresh_interval = st.slider("Live refresh interval (seconds)", 30, 300, 60)
 
-    if st.button("Start Live Analysis"):
+    if st.button("Run Historical Analysis"):
+        try:
+            # Fetch NSE instruments
+            instruments = kite.instruments("NSE")
+            df_instruments = pd.DataFrame(instruments)
+            row = df_instruments[df_instruments["tradingsymbol"] == symbol]
 
-        instruments = kite.instruments("NSE")
-        df_instruments = pd.DataFrame(instruments)
-        row = df_instruments[df_instruments["tradingsymbol"] == symbol]
-
-        if row.empty:
-            st.error(f"❌ Symbol {symbol} not found on NSE")
-        else:
-            token = int(row.iloc[0]["instrument_token"])
-
-            chart_placeholder = st.empty()
-            table_placeholder = st.empty()
-            rec_placeholder = st.empty()
-
-            while True:
-                try:
-                    # ---- Fetch last 5 days 5-min candles ----
-                    start_time = datetime.now() - timedelta(days=5)
-                    end_time = datetime.now()
-                    hist = kite.historical_data(token, start_time, end_time, interval="5minute")
-                    df = pd.DataFrame(hist)
-                    if df.empty:
-                        st.warning("⚠️ No data available")
-                        time.sleep(refresh_interval)
-                        continue
-
-                    # Ensure numeric columns
+            if row.empty:
+                st.error(f"❌ Symbol {symbol} not found on NSE")
+            else:
+                token = int(row.iloc[0]["instrument_token"])
+                
+                # ---- Historical Daily Data ----
+                hist = kite.historical_data(token, start_date, end_date, interval="day")
+                df_hist = pd.DataFrame(hist)
+                if df_hist.empty:
+                    st.warning("⚠️ No historical data available")
+                else:
+                    # Ensure numeric
                     for col in ["open","high","low","close","volume"]:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-                    df = df.sort_values("date", ascending=False)
+                        df_hist[col] = pd.to_numeric(df_hist[col], errors='coerce')
+                    df_hist['date'] = pd.to_datetime(df_hist['date'], errors='coerce')
+                    df_hist = df_hist.sort_values("date")
 
-                    # ---- Technical Indicators ----
-                    df["fast_ma"] = df["close"].rolling(20).mean()
-                    df["slow_ma"] = df["close"].rolling(50).mean()
-                    df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
-                    macd = ta.trend.MACD(df["close"])
-                    df["macd"] = macd.macd()
-                    df["macd_signal"] = macd.macd_signal()
-                    boll = ta.volatility.BollingerBands(df["close"])
-                    df["bb_high"] = boll.bollinger_hband()
-                    df["bb_low"] = boll.bollinger_lband()
+                    # Technical indicators
+                    df_hist["fast_ma"] = df_hist["close"].rolling(20).mean()
+                    df_hist["slow_ma"] = df_hist["close"].rolling(50).mean()
+                    df_hist["rsi"] = ta.momentum.RSIIndicator(df_hist["close"], window=14).rsi()
+                    macd = ta.trend.MACD(df_hist["close"])
+                    df_hist["macd"] = macd.macd()
+                    df_hist["macd_signal"] = macd.macd_signal()
+                    boll = ta.volatility.BollingerBands(df_hist["close"])
+                    df_hist["bb_high"] = boll.bollinger_hband()
+                    df_hist["bb_low"] = boll.bollinger_lband()
 
-                    # Latest valid row
-                    df_valid = df.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low"])
-                    if df_valid.empty:
-                        latest = df.iloc[0]
-                    else:
-                        latest = df_valid.iloc[0]
-
-                    # ---- Recommendation ----
-                    score = 0
-                    if not pd.isna(latest["fast_ma"]) and not pd.isna(latest["slow_ma"]):
-                        score += 2 if latest["fast_ma"] > latest["slow_ma"] else -2
-                    if not pd.isna(latest["rsi"]):
-                        score += 1 if latest["rsi"] < 30 else (-1 if latest["rsi"] > 70 else 0)
-                    if not pd.isna(latest["macd"]) and not pd.isna(latest["macd_signal"]):
-                        score += 1 if latest["macd"] > latest["macd_signal"] else -1
-                    if not pd.isna(latest["close"]) and not pd.isna(latest["bb_high"]) and not pd.isna(latest["bb_low"]):
-                        score += 1 if latest["close"] < latest["bb_low"] else (-1 if latest["close"] > latest["bb_high"] else 0)
-
-                    recommendation = (
-                        "STRONG BUY" if score >= 4 else
-                        "BUY" if score >= 2 else
-                        "HOLD" if score > -2 else
-                        "SELL" if score > -4 else
-                        "STRONG SELL"
-                    )
-
-                    # ---- Candlestick Chart ----
-                    df_plot = df.sort_values("date")
-                    fig = go.Figure()
-                    fig.add_trace(go.Candlestick(
-                        x=df_plot['date'],
-                        open=df_plot['open'],
-                        high=df_plot['high'],
-                        low=df_plot['low'],
-                        close=df_plot['close'],
+                    # ---- Interactive Historical Chart ----
+                    st.subheader("📈 Historical Candlestick Chart")
+                    fig_hist = go.Figure()
+                    fig_hist.add_trace(go.Candlestick(
+                        x=df_hist['date'],
+                        open=df_hist['open'],
+                        high=df_hist['high'],
+                        low=df_hist['low'],
+                        close=df_hist['close'],
                         name='Price'
                     ))
-                    fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['fast_ma'], line=dict(color='blue', width=1), name='Fast MA'))
-                    fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['slow_ma'], line=dict(color='orange', width=1), name='Slow MA'))
-                    fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['bb_high'], line=dict(color='green', width=1, dash='dot'), name='BB High'))
-                    fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['bb_low'], line=dict(color='red', width=1, dash='dot'), name='BB Low'))
-                    fig.update_layout(xaxis_title="Date", yaxis_title="Price", xaxis_rangeslider_visible=False, height=600)
-                    chart_placeholder.plotly_chart(fig, use_container_width=True)
+                    fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['fast_ma'], line=dict(color='blue', width=1), name='Fast MA'))
+                    fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['slow_ma'], line=dict(color='orange', width=1), name='Slow MA'))
+                    fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['bb_high'], line=dict(color='green', width=1, dash='dot'), name='BB High'))
+                    fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['bb_low'], line=dict(color='red', width=1, dash='dot'), name='BB Low'))
+                    fig_hist.update_layout(xaxis_title="Date", yaxis_title="Price", xaxis_rangeslider_visible=True, height=600)
+                    st.plotly_chart(fig_hist, use_container_width=True)
 
-                    # ---- Table & Recommendation ----
-                    table_placeholder.dataframe(df.head(50), use_container_width=True)
-                    rec_placeholder.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
+        except Exception as e:
+            st.error(f"Error fetching historical data: {e}")
 
-                except Exception as e:
-                    st.error(f"Error fetching data: {e}")
+    if st.button("Start Live Analysis"):
+        try:
+            instruments = kite.instruments("NSE")
+            df_instruments = pd.DataFrame(instruments)
+            row = df_instruments[df_instruments["tradingsymbol"] == symbol]
 
-                time.sleep(refresh_interval)
+            if row.empty:
+                st.error(f"❌ Symbol {symbol} not found on NSE")
+            else:
+                token = int(row.iloc[0]["instrument_token"])
+                chart_placeholder = st.empty()
+                table_placeholder = st.empty()
+                rec_placeholder = st.empty()
+
+                while True:
+                    try:
+                        # Fetch latest 5-min candles (last 5 days)
+                        intraday_start = datetime.now() - timedelta(days=5)
+                        hist = kite.historical_data(token, intraday_start, datetime.now(), interval="5minute")
+                        df_live = pd.DataFrame(hist)
+                        if df_live.empty:
+                            st.warning("⚠️ No live data available")
+                            time.sleep(refresh_interval)
+                            continue
+
+                        for col in ["open","high","low","close","volume"]:
+                            df_live[col] = pd.to_numeric(df_live[col], errors='coerce')
+                        df_live['date'] = pd.to_datetime(df_live['date'], errors='coerce')
+                        df_live = df_live.sort_values("date", ascending=False)
+
+                        # Technical indicators
+                        df_live["fast_ma"] = df_live["close"].rolling(20).mean()
+                        df_live["slow_ma"] = df_live["close"].rolling(50).mean()
+                        df_live["rsi"] = ta.momentum.RSIIndicator(df_live["close"], window=14).rsi()
+                        macd = ta.trend.MACD(df_live["close"])
+                        df_live["macd"] = macd.macd()
+                        df_live["macd_signal"] = macd.macd_signal()
+                        boll = ta.volatility.BollingerBands(df_live["close"])
+                        df_live["bb_high"] = boll.bollinger_hband()
+                        df_live["bb_low"] = boll.bollinger_lband()
+
+                        # Latest valid row
+                        df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low"])
+                        latest = df_valid.iloc[0] if not df_valid.empty else df_live.iloc[0]
+
+                        # Recommendation
+                        score = 0
+                        if not pd.isna(latest["fast_ma"]) and not pd.isna(latest["slow_ma"]):
+                            score += 2 if latest["fast_ma"] > latest["slow_ma"] else -2
+                        if not pd.isna(latest["rsi"]):
+                            score += 1 if latest["rsi"] < 30 else (-1 if latest["rsi"] > 70 else 0)
+                        if not pd.isna(latest["macd"]) and not pd.isna(latest["macd_signal"]):
+                            score += 1 if latest["macd"] > latest["macd_signal"] else -1
+                        if not pd.isna(latest["close"]) and not pd.isna(latest["bb_high"]) and not pd.isna(latest["bb_low"]):
+                            score += 1 if latest["close"] < latest["bb_low"] else (-1 if latest["close"] > latest["bb_high"] else 0)
+
+                        recommendation = (
+                            "STRONG BUY" if score >= 4 else
+                            "BUY" if score >= 2 else
+                            "HOLD" if score > -2 else
+                            "SELL" if score > -4 else
+                            "STRONG SELL"
+                        )
+
+                        # Live Plotly chart
+                        df_plot_live = df_live.sort_values("date")
+                        fig_live = go.Figure()
+                        fig_live.add_trace(go.Candlestick(
+                            x=df_plot_live['date'],
+                            open=df_plot_live['open'],
+                            high=df_plot_live['high'],
+                            low=df_plot_live['low'],
+                            close=df_plot_live['close'],
+                            name='Price'
+                        ))
+                        fig_live.add_trace(go.Scatter(x=df_plot_live['date'], y=df_plot_live['fast_ma'], line=dict(color='blue', width=1), name='Fast MA'))
+                        fig_live.add_trace(go.Scatter(x=df_plot_live['date'], y=df_plot_live['slow_ma'], line=dict(color='orange', width=1), name='Slow MA'))
+                        fig_live.add_trace(go.Scatter(x=df_plot_live['date'], y=df_plot_live['bb_high'], line=dict(color='green', width=1, dash='dot'), name='BB High'))
+                        fig_live.add_trace(go.Scatter(x=df_plot_live['date'], y=df_plot_live['bb_low'], line=dict(color='red', width=1, dash='dot'), name='BB Low'))
+                        fig_live.update_layout(xaxis_title="Date", yaxis_title="Price", xaxis_rangeslider_visible=False, height=600)
+                        chart_placeholder.plotly_chart(fig_live, use_container_width=True)
+
+                        # Table & recommendation
+                        table_placeholder.dataframe(df_live.head(50), use_container_width=True)
+                        rec_placeholder.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
+
+                    except Exception as e:
+                        st.error(f"Error fetching live data: {e}")
+
+                    time.sleep(refresh_interval)
+
+        except Exception as e:
+            st.error(f"Error initializing live analysis: {e}")
