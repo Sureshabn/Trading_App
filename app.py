@@ -55,7 +55,7 @@ if st.session_state["access_token"]:
     end_date = st.date_input("End Date", datetime.today())
     refresh_interval = st.slider("Live refresh interval (seconds)", 30, 300, 60)
 
-    # Fetch instruments safely
+    # ---- Fetch instruments safely ----
     try:
         instruments = kite.instruments("NSE")
         df_instruments = pd.DataFrame(instruments)
@@ -80,7 +80,6 @@ if st.session_state["access_token"]:
                     if df_hist.empty:
                         st.warning("⚠️ No historical data available")
                     else:
-                        # Numeric conversion
                         for col in ["open", "high", "low", "close", "volume"]:
                             df_hist[col] = pd.to_numeric(df_hist[col], errors='coerce')
                         df_hist['date'] = pd.to_datetime(df_hist['date'], errors='coerce')
@@ -210,12 +209,10 @@ if st.session_state["access_token"]:
                             height=600
                         )
                         chart_placeholder.plotly_chart(fig_live, use_container_width=True)
-
                         table_placeholder.dataframe(df_live.head(50), use_container_width=True)
                         rec_placeholder.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
 
                         time.sleep(refresh_interval)
-
                     except Exception as e:
                         st.error(f"Error fetching live data: {e}")
                         break
