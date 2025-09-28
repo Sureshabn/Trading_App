@@ -3,7 +3,7 @@ import streamlit as st
 from kiteconnect import KiteConnect
 import pandas as pd
 import ta
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
 st.title("📈 Zerodha Live Stock Analysis & Recommendation")
@@ -61,18 +61,31 @@ if st.session_state["access_token"]:
                 st.error(f"❌ Symbol {symbol} not found on NSE")
             else:
                 token = int(row.iloc[0]["instrument_token"])
-                hist = kite.historical_data(
-                    token,
-                    start_date,
-                    end_date,
-                    interval="day"
-                )
-                df = pd.DataFrame(hist)
+                
+                # Try daily historical data first
+                try:
+                    hist = kite.historical_data(token, start_date, end_date, interval="day")
+                    df = pd.DataFrame(hist)
+                    if len(df) < 50:
+                        raise ValueError("Not enough daily data, switching to 5-min intraday data")
+                except:
+                    # Fallback to intraday 5-min candles for the last 5 days
+                    st.warning("⚠️ Using 5-min intraday data due to limited historical data")
+                    intraday_start = datetime.today() - timedelta(days=5)
+                    hist = kite.historical_data(token, intraday_start, datetime.today(), interval="5minute")
+                    df = pd.DataFrame(hist)
 
                 if df.empty:
-                    st.warning("⚠️ No historical data available for this range.")
+                    st.warning("⚠️ No data available for this symbol.")
                 else:
-                    # ---- Convert date and sort descending ----
+                    # Ensure numeric columns
+                    df['close'] = pd.to_numeric(df['close'], errors='coerce')
+                    df['open'] = pd.to_numeric(df['open'], errors='coerce')
+                    df['high'] = pd.to_numeric(df['high'], errors='coerce')
+                    df['low'] = pd.to_numeric(df['low'], errors='coerce')
+                    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+
+                    # Convert date to datetime
                     df['date'] = pd.to_datetime(df['date'], errors='coerce')
                     df = df.sort_values("date", ascending=False)
 
@@ -87,7 +100,8 @@ if st.session_state["access_token"]:
                     df["bb_high"] = boll.bollinger_hband()
                     df["bb_low"] = boll.bollinger_lband()
 
-                    latest = df.iloc[0]  # most recent row
+                    # Pick the most recent row with all indicators
+                    latest = df.dropna(subset=["fast_ma", "slow_ma", "rsi", "macd", "macd_signal", "bb_high", "bb_low"]).iloc[0]
 
                     # ---- Recommendation Logic ----
                     score = 0
@@ -104,8 +118,8 @@ if st.session_state["access_token"]:
                         "STRONG SELL"
                     )
 
-                    # ---- Display Data ----
-                    st.subheader(f"Latest Data for {symbol} ({latest['date'].strftime('%Y-%m-%d')})")
+                    # ---- Display Table ----
+                    st.subheader(f"Latest Data for {symbol} ({latest['date'].strftime('%Y-%m-%d %H:%M')})")
                     st.dataframe(df.head(50), use_container_width=True)
 
                     st.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
