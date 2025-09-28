@@ -3,7 +3,7 @@ import streamlit as st
 from kiteconnect import KiteConnect
 import pandas as pd
 import ta
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
 st.title("📈 Zerodha Live Stock Analysis & Recommendation")
@@ -72,6 +72,10 @@ if st.session_state["access_token"]:
                 if df.empty:
                     st.warning("⚠️ No historical data available for this range.")
                 else:
+                    # ---- Convert date and sort descending ----
+                    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                    df = df.sort_values("date", ascending=False)
+
                     # ---- Technical Indicators ----
                     df["fast_ma"] = df["close"].rolling(20).mean()
                     df["slow_ma"] = df["close"].rolling(50).mean()
@@ -83,7 +87,7 @@ if st.session_state["access_token"]:
                     df["bb_high"] = boll.bollinger_hband()
                     df["bb_low"] = boll.bollinger_lband()
 
-                    latest = df.iloc[-1]
+                    latest = df.iloc[0]  # most recent row
 
                     # ---- Recommendation Logic ----
                     score = 0
@@ -102,7 +106,7 @@ if st.session_state["access_token"]:
 
                     # ---- Display Data ----
                     st.subheader(f"Latest Data for {symbol} ({latest['date'].strftime('%Y-%m-%d')})")
-                    st.dataframe(df.sort_values("date", ascending=False).tail(50), use_container_width=True)
+                    st.dataframe(df.head(50), use_container_width=True)
 
                     st.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
 
