@@ -10,7 +10,7 @@ import time
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
 st.title("📈 Zerodha Live Stock Analysis & Recommendation")
 
-# ---- Zerodha API credentials from Streamlit Secrets ----
+# ---- Zerodha API credentials ----
 API_KEY = st.secrets["API_KEY"]
 API_SECRET = st.secrets["API_SECRET"]
 
@@ -22,7 +22,6 @@ if "access_token" not in st.session_state:
 if "token_date" not in st.session_state:
     st.session_state["token_date"] = None
 
-# ---- Use cached token if today ----
 if st.session_state["access_token"] and st.session_state["token_date"] == str(date.today()):
     kite.set_access_token(st.session_state["access_token"])
     st.success("✅ Using saved access token for today!")
@@ -208,11 +207,13 @@ if st.session_state["access_token"]:
                             xaxis_rangeslider_visible=False,
                             height=600
                         )
+
                         chart_placeholder.plotly_chart(fig_live, use_container_width=True)
                         table_placeholder.dataframe(df_live.head(50), use_container_width=True)
                         rec_placeholder.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
 
                         time.sleep(refresh_interval)
+
                     except Exception as e:
                         st.error(f"Error fetching live data: {e}")
                         break
