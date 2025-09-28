@@ -5,3 +5,4 @@ alpha_vantage
 ta
 pandas
 kiteconnect
+plotly
