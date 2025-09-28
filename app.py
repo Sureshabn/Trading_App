@@ -17,7 +17,7 @@ API_SECRET = st.secrets["API_SECRET"]
 
 kite = KiteConnect(api_key=API_KEY)
 
-# ---- Session State for Access Token ----
+# ---- Session State ----
 if "access_token" not in st.session_state:
     st.session_state["access_token"] = None
 if "token_date" not in st.session_state:
@@ -25,12 +25,12 @@ if "token_date" not in st.session_state:
 if "live_running" not in st.session_state:
     st.session_state["live_running"] = False
 
-# ---- Check if token exists and is valid today ----
+# ---- Check token validity ----
 if st.session_state["access_token"] and st.session_state["token_date"] == str(date.today()):
     kite.set_access_token(st.session_state["access_token"])
     st.success("✅ Using saved access token for today!")
 
-# ---- Login Section ----
+# ---- Zerodha Login ----
 if not st.session_state["access_token"]:
     st.subheader("🔑 Zerodha Login")
     login_url = kite.login_url()
@@ -67,9 +67,9 @@ if st.session_state["access_token"]:
                 st.error(f"❌ Symbol {symbol} not found on NSE")
             else:
                 token = int(row.iloc[0]["instrument_token"])
-
                 hist = kite.historical_data(token, start_date, end_date, interval="day")
                 df_hist = pd.DataFrame(hist)
+
                 if df_hist.empty:
                     st.warning("⚠️ No historical data available")
                 else:
@@ -89,12 +89,12 @@ if st.session_state["access_token"]:
                     df_hist["bb_high"] = boll.bollinger_hband()
                     df_hist["bb_low"] = boll.bollinger_lband()
 
-                    # ---- Interactive Historical Chart with MACD+RSI ----
+                    # ---- Plotly Chart with MACD + RSI ----
                     st.subheader("📈 Historical Candlestick with MACD & RSI")
-                    fig_hist = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                                             vertical_spacing=0.15,
-                                             row_heights=[0.7, 0.3],
-                                             subplot_titles=("Price", "MACD & RSI"))
+                    fig_hist = make_subplots(
+                        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
+                        row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI")
+                    )
 
                     fig_hist.add_trace(go.Candlestick(
                         x=df_hist['date'],
@@ -116,6 +116,9 @@ if st.session_state["access_token"]:
 
                     fig_hist.update_layout(xaxis_rangeslider_visible=True, height=700)
                     st.plotly_chart(fig_hist, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Error fetching historical data: {e}")
 
     # ---- Live Analysis ----
     if st.button("Start Live Analysis"):
@@ -150,6 +153,7 @@ if st.session_state["access_token"]:
                         df_live['date'] = pd.to_datetime(df_live['date'], errors='coerce')
                         df_live = df_live.sort_values("date")
 
+                        # Technical indicators
                         df_live["fast_ma"] = df_live["close"].rolling(20).mean()
                         df_live["slow_ma"] = df_live["close"].rolling(50).mean()
                         df_live["rsi"] = ta.momentum.RSIIndicator(df_live["close"], window=14).rsi()
@@ -160,6 +164,7 @@ if st.session_state["access_token"]:
                         df_live["bb_high"] = boll.bollinger_hband()
                         df_live["bb_low"] = boll.bollinger_lband()
 
+                        # Latest valid row
                         df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low"])
                         latest = df_valid.iloc[0] if not df_valid.empty else df_live.iloc[0]
 
@@ -182,19 +187,17 @@ if st.session_state["access_token"]:
                             "STRONG SELL"
                         )
 
-                        # Live Plotly chart with MACD+RSI
-                        fig_live = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                                                 vertical_spacing=0.15,
-                                                 row_heights=[0.7,0.3],
-                                                 subplot_titles=("Price", "MACD & RSI"))
+                        # Live Chart with MACD+RSI
+                        fig_live = make_subplots(
+                            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
+                            row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI")
+                        )
+
                         fig_live.add_trace(go.Candlestick(
-                            x=df_live['date'],
-                            open=df_live['open'],
-                            high=df_live['high'],
-                            low=df_live['low'],
-                            close=df_live['close'],
-                            name='Price'
+                            x=df_live['date'], open=df_live['open'], high=df_live['high'],
+                            low=df_live['low'], close=df_live['close'], name='Price'
                         ), row=1, col=1)
+
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['fast_ma'], line=dict(color='blue', width=1), name='Fast MA'), row=1, col=1)
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['slow_ma'], line=dict(color='orange', width=1), name='Slow MA'), row=1, col=1)
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['bb_high'], line=dict(color='green', width=1, dash='dot'), name='BB High'), row=1, col=1)
@@ -210,7 +213,6 @@ if st.session_state["access_token"]:
 
                     except Exception as e:
                         st.error(f"Error fetching live data: {e}")
-                        time.sleep(refresh_interval)
 
                     time.sleep(refresh_interval)
 
