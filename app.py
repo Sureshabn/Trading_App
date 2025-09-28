@@ -31,12 +31,8 @@ if st.session_state["access_token"] and st.session_state["token_date"] == str(da
 # ---- Login Section ----
 if not st.session_state["access_token"]:
     st.subheader("🔑 Zerodha Login")
-    try:
-        login_url = kite.login_url()
-        st.markdown(f"[Click here to login to Zerodha]({login_url})")
-    except Exception as e:
-        st.error(f"Error generating login URL: {e}")
-
+    login_url = kite.login_url()
+    st.markdown(f"[Click here to login to Zerodha]({login_url})")
     request_token = st.text_input("Paste Request Token after login:")
 
     if request_token:
@@ -74,6 +70,7 @@ if st.session_state["access_token"]:
                 if df_hist.empty:
                     st.warning("⚠️ No historical data available")
                 else:
+                    # Numeric conversion
                     for col in ["open","high","low","close","volume"]:
                         df_hist[col] = pd.to_numeric(df_hist[col], errors='coerce')
                     df_hist['date'] = pd.to_datetime(df_hist['date'], errors='coerce')
@@ -90,7 +87,7 @@ if st.session_state["access_token"]:
                     df_hist["bb_high"] = boll.bollinger_hband()
                     df_hist["bb_low"] = boll.bollinger_lband()
 
-                    # ---- Interactive Historical Chart ----
+                    # Historical Candlestick Chart
                     st.subheader("📈 Historical Candlestick Chart")
                     fig_hist = go.Figure()
                     fig_hist.add_trace(go.Candlestick(
@@ -108,11 +105,18 @@ if st.session_state["access_token"]:
                     fig_hist.update_layout(xaxis_title="Date", yaxis_title="Price", xaxis_rangeslider_visible=True, height=600)
                     st.plotly_chart(fig_hist, use_container_width=True)
 
-        except Exception as e:
-            st.error(f"Error fetching historical data: {e}")
+    # ---- Live Analysis Control ----
+    if "live_running" not in st.session_state:
+        st.session_state["live_running"] = False
 
-    # ---- Live Analysis ----
     if st.button("Start Live Analysis"):
+        st.session_state["live_running"] = True
+
+    if st.button("Stop Live Analysis"):
+        st.session_state["live_running"] = False
+
+    # ---- Live Analysis Loop ----
+    if st.session_state["live_running"]:
         try:
             instruments = kite.instruments("NSE")
             df_instruments = pd.DataFrame(instruments)
@@ -125,91 +129,113 @@ if st.session_state["access_token"]:
                 chart_placeholder = st.empty()
                 table_placeholder = st.empty()
                 rec_placeholder = st.empty()
+                last_updated_placeholder = st.empty()
+                last_update = datetime.now() - timedelta(seconds=refresh_interval)
 
-                while True:
-                    try:
-                        intraday_start = datetime.now() - timedelta(days=5)
-                        hist = kite.historical_data(token, intraday_start, datetime.now(), interval="5minute")
-                        df_live = pd.DataFrame(hist)
-                        if df_live.empty:
-                            st.warning("⚠️ No live data available")
-                            time.sleep(refresh_interval)
-                            continue
+                while st.session_state["live_running"]:
+                    if (datetime.now() - last_update).total_seconds() >= refresh_interval:
+                        last_update = datetime.now()
+                        try:
+                            intraday_start = datetime.now() - timedelta(days=5)
+                            hist = kite.historical_data(token, intraday_start, datetime.now(), interval="5minute")
+                            df_live = pd.DataFrame(hist)
+                            if df_live.empty:
+                                st.warning("⚠️ No live data available")
+                                continue
 
-                        for col in ["open","high","low","close","volume"]:
-                            df_live[col] = pd.to_numeric(df_live[col], errors='coerce')
-                        df_live['date'] = pd.to_datetime(df_live['date'], errors='coerce')
-                        df_live = df_live.sort_values("date", ascending=True)
+                            for col in ["open","high","low","close","volume"]:
+                                df_live[col] = pd.to_numeric(df_live[col], errors='coerce')
+                            df_live['date'] = pd.to_datetime(df_live['date'], errors='coerce')
+                            df_live = df_live.sort_values("date", ascending=True)
 
-                        # Technical indicators
-                        df_live["fast_ma"] = df_live["close"].rolling(20).mean()
-                        df_live["slow_ma"] = df_live["close"].rolling(50).mean()
-                        df_live["rsi"] = ta.momentum.RSIIndicator(df_live["close"], window=14).rsi()
-                        macd = ta.trend.MACD(df_live["close"])
-                        df_live["macd"] = macd.macd()
-                        df_live["macd_signal"] = macd.macd_signal()
-                        boll = ta.volatility.BollingerBands(df_live["close"])
-                        df_live["bb_high"] = boll.bollinger_hband()
-                        df_live["bb_low"] = boll.bollinger_lband()
+                            # Technical indicators
+                            df_live["fast_ma"] = df_live["close"].rolling(20).mean()
+                            df_live["slow_ma"] = df_live["close"].rolling(50).mean()
+                            df_live["rsi"] = ta.momentum.RSIIndicator(df_live["close"], window=14).rsi()
+                            macd = ta.trend.MACD(df_live["close"])
+                            df_live["macd"] = macd.macd()
+                            df_live["macd_signal"] = macd.macd_signal()
+                            boll = ta.volatility.BollingerBands(df_live["close"])
+                            df_live["bb_high"] = boll.bollinger_hband()
+                            df_live["bb_low"] = boll.bollinger_lband()
 
-                        df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low"])
-                        latest = df_valid.iloc[-1] if not df_valid.empty else df_live.iloc[-1]
+                            df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low"])
+                            latest = df_valid.iloc[-1] if not df_valid.empty else df_live.iloc[-1]
 
-                        # Recommendation calculation
-                        score = 0
-                        if not pd.isna(latest["fast_ma"]) and not pd.isna(latest["slow_ma"]):
-                            score += 2 if latest["fast_ma"] > latest["slow_ma"] else -2
-                        if not pd.isna(latest["rsi"]):
-                            score += 1 if latest["rsi"] < 30 else (-1 if latest["rsi"] > 70 else 0)
-                        if not pd.isna(latest["macd"]) and not pd.isna(latest["macd_signal"]):
-                            score += 1 if latest["macd"] > latest["macd_signal"] else -1
-                        if not pd.isna(latest["close"]) and not pd.isna(latest["bb_high"]) and not pd.isna(latest["bb_low"]):
-                            score += 1 if latest["close"] < latest["bb_low"] else (-1 if latest["close"] > latest["bb_high"] else 0)
+                            # Recommendation
+                            score = 0
+                            if not pd.isna(latest["fast_ma"]) and not pd.isna(latest["slow_ma"]):
+                                score += 2 if latest["fast_ma"] > latest["slow_ma"] else -2
+                            if not pd.isna(latest["rsi"]):
+                                score += 1 if latest["rsi"] < 30 else (-1 if latest["rsi"] > 70 else 0)
+                            if not pd.isna(latest["macd"]) and not pd.isna(latest["macd_signal"]):
+                                score += 1 if latest["macd"] > latest["macd_signal"] else -1
+                            if not pd.isna(latest["close"]) and not pd.isna(latest["bb_high"]) and not pd.isna(latest["bb_low"]):
+                                score += 1 if latest["close"] < latest["bb_low"] else (-1 if latest["close"] > latest["bb_high"] else 0)
 
-                        recommendation = (
-                            "STRONG BUY" if score >= 4 else
-                            "BUY" if score >= 2 else
-                            "HOLD" if score > -2 else
-                            "SELL" if score > -4 else
-                            "STRONG SELL"
-                        )
+                            recommendation = (
+                                "STRONG BUY" if score >= 4 else
+                                "BUY" if score >= 2 else
+                                "HOLD" if score > -2 else
+                                "SELL" if score > -4 else
+                                "STRONG SELL"
+                            )
 
-                        # ---- Plotly: Candlestick + MA + Bollinger + MACD + RSI ----
-                        fig_live = make_subplots(
-                            rows=3, cols=1, shared_xaxes=True,
-                            vertical_spacing=0.05, row_heights=[0.5,0.25,0.25],
-                            subplot_titles=("Price + MA + Bollinger", "MACD", "RSI")
-                        )
+                            # Recommendation color
+                            if "BUY" in recommendation:
+                                rec_color = "green"
+                            elif "SELL" in recommendation:
+                                rec_color = "red"
+                            else:
+                                rec_color = "gray"
 
-                        # Price
-                        fig_live.add_trace(go.Candlestick(
-                            x=df_live['date'], open=df_live['open'], high=df_live['high'],
-                            low=df_live['low'], close=df_live['close'], name='Price'
-                        ), row=1, col=1)
-                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['fast_ma'], line=dict(color='blue', width=1), name='Fast MA'), row=1, col=1)
-                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['slow_ma'], line=dict(color='orange', width=1), name='Slow MA'), row=1, col=1)
-                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['bb_high'], line=dict(color='green', width=1, dash='dot'), name='BB High'), row=1, col=1)
-                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['bb_low'], line=dict(color='red', width=1, dash='dot'), name='BB Low'), row=1, col=1)
+                            # Last Updated
+                            last_updated_placeholder.markdown(f"⏱ Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-                        # MACD
-                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['macd'], line=dict(color='blue', width=1), name='MACD'), row=2, col=1)
-                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['macd_signal'], line=dict(color='red', width=1), name='MACD Signal'), row=2, col=1)
+                            # Plotly Live Chart with MACD + RSI + Recommendation Marker
+                            fig_live = make_subplots(
+                                rows=3, cols=1, shared_xaxes=True,
+                                vertical_spacing=0.05, row_heights=[0.5,0.25,0.25],
+                                subplot_titles=("Price + MA + Bollinger", "MACD", "RSI")
+                            )
+                            fig_live.add_trace(go.Candlestick(
+                                x=df_live['date'], open=df_live['open'], high=df_live['high'],
+                                low=df_live['low'], close=df_live['close'], name='Price'
+                            ), row=1, col=1)
+                            fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['fast_ma'], line=dict(color='blue', width=1), name='Fast MA'), row=1, col=1)
+                            fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['slow_ma'], line=dict(color='orange', width=1), name='Slow MA'), row=1, col=1)
+                            fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['bb_high'], line=dict(color='green', width=1, dash='dot'), name='BB High'), row=1, col=1)
+                            fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['bb_low'], line=dict(color='red', width=1, dash='dot'), name='BB Low'), row=1, col=1)
+                            fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['macd'], line=dict(color='blue', width=1), name='MACD'), row=2, col=1)
+                            fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['macd_signal'], line=dict(color='red', width=1), name='MACD Signal'), row=2, col=1)
+                            fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['rsi'], line=dict(color='purple', width=1), name='RSI'), row=3, col=1)
+                            fig_live.add_hline(y=70, line=dict(color='red', dash='dot'), row=3, col=1)
+                            fig_live.add_hline(y=30, line=dict(color='green', dash='dot'), row=3, col=1)
 
-                        # RSI
-                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['rsi'], line=dict(color='purple', width=1), name='RSI'), row=3, col=1)
-                        fig_live.add_hline(y=70, line=dict(color='red', dash='dot'), row=3, col=1)
-                        fig_live.add_hline(y=30, line=dict(color='green', dash='dot'), row=3, col=1)
+                            # Add recommendation marker
+                            fig_live.add_annotation(
+                                x=df_live['date'].iloc[-1],
+                                y=df_live['close'].max(),
+                                text=f"Recommendation: {recommendation}",
+                                showarrow=False,
+                                font=dict(size=14, color=rec_color),
+                                bgcolor="white",
+                                bordercolor=rec_color,
+                                borderwidth=2,
+                                xanchor="right",
+                                yanchor="top",
+                            )
 
-                        fig_live.update_layout(height=900, xaxis_rangeslider_visible=False, showlegend=True)
-                        chart_placeholder.plotly_chart(fig_live, use_container_width=True)
+                            fig_live.update_layout(height=900, xaxis_rangeslider_visible=False, showlegend=True)
 
-                        # Table & recommendation
-                        table_placeholder.dataframe(df_live.head(50), use_container_width=True)
-                        rec_placeholder.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
+                            chart_placeholder.plotly_chart(fig_live, use_container_width=True)
+                            table_placeholder.dataframe(df_live.tail(50).sort_values("date", ascending=False), use_container_width=True)
+                            rec_placeholder.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
 
-                    except Exception as e:
-                        st.error(f"Error fetching live data: {e}")
-                    time.sleep(refresh_interval)
+                        except Exception as e:
+                            st.error(f"Error fetching live data: {e}")
+
+                    time.sleep(1)
 
         except Exception as e:
             st.error(f"Error initializing live analysis: {e}")
