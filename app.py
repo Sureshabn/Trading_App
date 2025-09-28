@@ -1,4 +1,4 @@
-# app.py - PRO VERSION 7 (Final Working Code - Syntax Error Fixed)
+# app.py - PRO VERSION 8 (Final with Volume, Liquidity, and Price Action Safeguards)
 import streamlit as st
 from kiteconnect import KiteConnect
 import pandas as pd
@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
-st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V7)")
+st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V8 - SAFEGURADS ADDED)")
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
 try:
@@ -22,15 +22,12 @@ except KeyError:
 
 kite = KiteConnect(api_key=API_KEY)
 
-# ---- Session State ----
-if "access_token" not in st.session_state:
-    st.session_state["access_token"] = None
-if "token_date" not in st.session_state:
-    st.session_state["token_date"] = None
-if "live_running" not in st.session_state:
-    st.session_state["live_running"] = False
+# ---- Session State (Simplified for presentation) ----
+if "access_token" not in st.session_state: st.session_state["access_token"] = None
+if "token_date" not in st.session_state: st.session_state["token_date"] = None
+if "live_running" not in st.session_state: st.session_state["live_running"] = False
 
-# ---- Check token validity & Login Logic ----
+# [ ... Login and token check logic as before ... ]
 if st.session_state["access_token"] and st.session_state["token_date"] == str(date.today()):
     try:
         kite.set_access_token(st.session_state["access_token"])
@@ -84,6 +81,15 @@ if st.session_state["access_token"]:
         risk_percent = st.number_input("Risk per Trade (%)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
     with colC:
         atr_stop_mult = st.number_input("ATR Stop Multiplier", min_value=1.0, value=2.0, step=0.5)
+    
+    colD, colE = st.columns(2)
+    with colD:
+        # NEW: Volume Confirmation Threshold
+        volume_conf_mult = st.number_input("Volume Confirmation Multiplier (e.g., 1.5x ATR Vol)", min_value=1.0, value=1.5, step=0.1)
+    with colE:
+        # NEW: Swing High/Low Lookback
+        swing_lookback = st.number_input("Swing Lookback Periods (for S/R)", min_value=5, value=10)
+
 
     start_date = st.date_input("Historical Start Date", datetime(2022,1,1))
     end_date = st.date_input("Historical End Date", datetime.today())
@@ -91,7 +97,7 @@ if st.session_state["access_token"]:
     live_interval = st.selectbox("Intraday Bar Interval", ["5minute", "15minute", "30minute"])
 
 
-    # ---- Indicator Calculation Function ----
+    # ---- Indicator Calculation Function (Updated) ----
     @st.cache_data(ttl=600) 
     def calculate_indicators(df, fast_w, slow_w, rsi_w):
         for col in ["open","high","low","close","volume"]:
@@ -99,24 +105,28 @@ if st.session_state["access_token"]:
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
         df = df.sort_values("date")
         
+        # EMAs and Slope
         df["fast_ma"] = ta.trend.EMAIndicator(df["close"], window=fast_w).ema_indicator()
         df["slow_ma"] = ta.trend.EMAIndicator(df["close"], window=slow_w).ema_indicator()
         df["fast_ma_slope"] = (df["fast_ma"] - df["fast_ma"].shift(3)) / 3
         
+        # RSI, MACD, BB, ATR (as before)
         df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=rsi_w).rsi()
         macd = ta.trend.MACD(df["close"])
         df["macd"] = macd.macd()
         df["macd_signal"] = macd.macd_signal()
         df["macd_hist"] = macd.macd_diff() 
-        
         boll = ta.volatility.BollingerBands(df["close"])
         df["bb_high"] = boll.bollinger_hband()
         df["bb_low"] = boll.bollinger_lband()
         df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"], window=rsi_w).average_true_range()
 
+        # NEW: Volume Average (ATR Volume)
+        df["atr_volume"] = df["volume"].rolling(window=rsi_w).mean()
+
         return df
 
-    # ---- Historical Analysis Button (Plotting Logic) ----
+    # ---- Historical Analysis Button (Logic as before) ----
     if st.button("Run Historical Analysis (Daily Timeframe)"):
         try:
             instruments = kite.instruments("NSE")
@@ -186,7 +196,6 @@ if st.session_state["access_token"]:
                 rec_placeholder = st.empty()
                 targets_placeholder = st.empty() 
                 risk_placeholder = st.empty() 
-                # NEW PLACEHOLDERS
                 score_rules_placeholder = st.empty()
                 score_card_placeholder = st.empty()
 
@@ -204,7 +213,7 @@ if st.session_state["access_token"]:
 
                         df_live = calculate_indicators(df_live, fast_ema_w, slow_ema_w, rsi_w)
 
-                        df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low", "atr", "fast_ma_slope"])
+                        df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low", "atr", "fast_ma_slope", "atr_volume"])
                         
                         if df_valid.empty:
                             st.warning("⚠️ Not enough data yet to calculate all indicators.")
@@ -215,17 +224,15 @@ if st.session_state["access_token"]:
                         prev = df_valid.iloc[-2] if len(df_valid) >= 2 else None
 
 
-                        # --- 1. CORE SCORING LOGIC ---
+                        # --- 1. CORE SCORING LOGIC (As before) ---
                         score = 0
                         is_bullish_trend = False
                         is_bearish_trend = False
                         
-                        # Initialize component scores and condition flags for display
                         trend_score = 0
                         momentum_score = 0
                         reversion_score = 0
                         
-                        # Score Card Flags
                         flag_ma_cross_up = False
                         flag_ma_cross_down = False
                         flag_slope_pos = False
@@ -260,7 +267,6 @@ if st.session_state["access_token"]:
                             score -= 2; momentum_score -= 2
                             flag_macd_bear = True
                         else:
-                            # Simple crossover check for breakdown clarity
                             if latest["macd"] > latest["macd_signal"]: momentum_score += 1 
                             elif latest["macd"] < latest["macd_signal"]: momentum_score -= 1
 
@@ -279,9 +285,54 @@ if st.session_state["access_token"]:
                                     flag_rsi_bear = True
                                 if latest["close"] > latest["bb_high"] and latest["close"] < prev["close"]:
                                     score -= 1; reversion_score -= 1
+                                    
+                        # --- 2. NEW SAFEGURADS AND CONFIRMATION LOGIC ---
+                        
+                        # Calculate Swing High/Low (Price Action Safeguard)
+                        df_lookback = df_valid.iloc[-swing_lookback-1:-1] # Look at the bars preceding the current bar
+                        swing_high = df_lookback["high"].max() if not df_lookback.empty else latest["high"]
+                        swing_low = df_lookback["low"].min() if not df_lookback.empty else latest["low"]
+                        
+                        is_volume_confirmed = False
+                        volume_ratio = 0.0
+                        if latest["atr_volume"] > 0:
+                            volume_ratio = latest["volume"] / latest["atr_volume"]
+                            if volume_ratio >= volume_conf_mult:
+                                is_volume_confirmed = True
+
+                        is_breakout_confirmed = False
+                        if is_bullish_trend and latest["close"] > swing_high:
+                            is_breakout_confirmed = True
+                        elif is_bearish_trend and latest["close"] < swing_low:
+                            is_breakout_confirmed = True
+                        
+                        
+                        # --- 3. FINAL RECOMMENDATION (Updated with Safeguards) ---
+                        
+                        # Base Recommendation (as before)
+                        recommendation = (
+                            "STRONG BUY" if score >= 8 else 
+                            "BUY" if score >= 4 else          
+                            "HOLD/NEUTRAL" if score > -4 else 
+                            "SELL" if score > -8 else         
+                            "STRONG SELL"                     
+                        )
+
+                        # Apply Safeguard Filtering to the strongest signals
+                        if recommendation in ["STRONG BUY", "BUY"] and score >= 6:
+                            if not is_volume_confirmed:
+                                recommendation = "BUY (Low Volume)"
+                            if not is_breakout_confirmed:
+                                recommendation = "BUY (No Breakout)"
+                        
+                        if recommendation in ["STRONG SELL", "SELL"] and score <= -6:
+                            if not is_volume_confirmed:
+                                recommendation = "SELL (Low Volume)"
+                            if not is_breakout_confirmed:
+                                recommendation = "SELL (No Breakout)"
 
 
-                        # --- 2. RISK MANAGEMENT CALCULATIONS ---
+                        # --- 4. RISK MANAGEMENT CALCULATIONS (As before) ---
                         stop_loss, take_profit = None, None
                         suggested_quantity = 0
                         risk_per_trade = account_size * (risk_percent / 100)
@@ -292,29 +343,21 @@ if st.session_state["access_token"]:
                                 suggested_quantity = int(risk_per_trade / stop_distance)
                                 if suggested_quantity < 1: suggested_quantity = 1
 
-                            if score >= 6: 
+                            if score >= 6 and is_breakout_confirmed and is_volume_confirmed: 
                                 stop_loss_price = latest["close"] - stop_distance
                                 take_profit_price = latest["close"] + (stop_distance * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
                                 take_profit = f"{take_profit_price:.2f}"
-                            elif score <= -6: 
+                            elif score <= -6 and is_breakout_confirmed and is_volume_confirmed: 
                                 stop_loss_price = latest["close"] + stop_distance
                                 take_profit_price = latest["close"] - (stop_distance * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
                                 take_profit = f"{take_profit_price:.2f}"
 
                         
-                        recommendation = (
-                            "STRONG BUY" if score >= 8 else 
-                            "BUY" if score >= 4 else          
-                            "HOLD/NEUTRAL" if score > -4 else 
-                            "SELL" if score > -8 else         
-                            "STRONG SELL"                     
-                        )
-
-                        # --- 3. CHART AND DATA OUTPUT (FIXED PLOTTING SYNTAX) ---
+                        # --- 5. CHART AND DATA OUTPUT ---
                         
-                        # Static Score Rule Table (Displayed once)
+                        # Static Score Rule Table (As before)
                         with score_rules_placeholder.container():
                             st.markdown("### 🚦 Score Matrix Rules & Thresholds")
                             st.table(pd.DataFrame({
@@ -329,37 +372,41 @@ if st.session_state["access_token"]:
                                 * **HOLD/NEUTRAL:** $|Score| < 4$
                             """)
                         
-                        # Dynamic Score Card
+                        # Dynamic Score Card (Updated with Volume Data)
                         score_data = pd.DataFrame({
-                            "Component": ["Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)"],
+                            "Component": ["Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)", "Volume Ratio (New)"],
                             "Current Value": [
                                 f"{latest['fast_ma']:.2f} / {latest['slow_ma']:.2f}",
                                 f"{latest['fast_ma_slope']:.4f}",
                                 f"{latest['macd_hist']:.4f}",
-                                f"{latest['rsi']:.2f} (BB: {latest['bb_low']:.2f}/{latest['bb_high']:.2f})"
+                                f"{latest['rsi']:.2f} (BB: {latest['bb_low']:.2f}/{latest['bb_high']:.2f})",
+                                f"{volume_ratio:.2f}x (ATR: {latest['atr_volume']:.0f})"
                             ],
                             "Bullish Condition Met": [
                                 "✅" if flag_ma_cross_up else "❌",
                                 "✅" if flag_slope_pos else "❌",
                                 "✅" if flag_macd_bull else "❌",
-                                "✅" if flag_rsi_bull or (is_bullish_trend and latest['close'] < latest['bb_low']) else "❌"
+                                "✅" if flag_rsi_bull or (is_bullish_trend and latest['close'] < latest['bb_low']) else "❌",
+                                "✅" if is_volume_confirmed else "❌"
                             ],
                             "Bearish Condition Met": [
                                 "✅" if flag_ma_cross_down else "❌",
                                 "✅" if flag_slope_neg else "❌",
                                 "✅" if flag_macd_bear else "❌",
-                                "✅" if flag_rsi_bear or (is_bearish_trend and latest['close'] > latest['bb_high']) else "❌"
+                                "✅" if flag_rsi_bear or (is_bearish_trend and latest['close'] > latest['bb_high']) else "❌",
+                                "✅" if is_volume_confirmed else "❌"
                             ],
                             "Points Added (Bullish-Bearish)": [
                                 f"{4 if flag_ma_cross_up else (-4 if flag_ma_cross_down else 0)}",
                                 f"{2 if flag_slope_pos else (-2 if flag_slope_neg else 0)}",
                                 f"{2 if flag_macd_bull else (-2 if flag_macd_bear else 0)}",
-                                f"{1 if reversion_score > 0 else (-1 if reversion_score < 0 else 0)}"
+                                f"{1 if reversion_score > 0 else (-1 if reversion_score < 0 else 0)}",
+                                "N/A"
                             ]
                         })
                         score_card_placeholder.dataframe(score_data.set_index("Component"), use_container_width=True)
 
-                        # Live Chart (Visualizing SL/TP)
+                        # Live Chart (Visualizing SL/TP and S/R)
                         fig_live = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15, row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI"))
                         
                         # CANDLESTICK AND EMAS
@@ -367,10 +414,15 @@ if st.session_state["access_token"]:
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['fast_ma'], line=dict(color='blue', width=1), name=f'Fast EMA ({fast_ema_w})'), row=1, col=1)
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['slow_ma'], line=dict(color='orange', width=1), name=f'Slow EMA ({slow_ema_w})'), row=1, col=1)
                         
-                        # Visualize SL/TP only if a strong signal is present
+                        # Visualize SL/TP and S/R
                         if stop_loss and take_profit:
                             fig_live.add_hline(y=float(stop_loss), line_dash="dash", line_color="red", row=1, col=1, annotation_text="SL")
                             fig_live.add_hline(y=float(take_profit), line_dash="dash", line_color="green", row=1, col=1, annotation_text="TP")
+                        
+                        # NEW: Visualize Swing High/Low
+                        fig_live.add_hline(y=swing_high, line_dash="dash", line_color="purple", row=1, col=1, annotation_text="Swing High")
+                        fig_live.add_hline(y=swing_low, line_dash="dash", line_color="brown", row=1, col=1, annotation_text="Swing Low")
+
 
                         # MACD AND RSI
                         fig_live.add_trace(go.Bar(x=df_live['date'], y=df_live['macd_hist'], name='MACD Hist', marker_color='grey'), row=2, col=1)
@@ -385,7 +437,6 @@ if st.session_state["access_token"]:
                         rec_placeholder.subheader(f"💡 **{symbol}** Recommendation: **{recommendation}** (Total Score: {score})")
                         
                         # --- SCORE BREAKDOWN & CONFLICT ANALYSIS ---
-                        # **FIX APPLIED HERE**: Ensuring the string is properly formatted
                         targets_placeholder.markdown(f"""
                             **Score Breakdown:** * **Trend (MA/Slope):** **{trend_score}** / $\pm 6$
                             * **Momentum (MACD):** **{momentum_score}** / $\pm 2$
@@ -404,15 +455,16 @@ if st.session_state["access_token"]:
                             
                             conflict_col2.markdown(f"""
                                 **Entry Triggers:**
-                                * **BULLISH:** Trend Score must reach $\ge 4$ (EMA Cross UP).
-                                * **BEARISH:** Trend Score must reach $\le -6$ (EMA Cross DOWN AND Slope confirms trend).
+                                * **BULLISH:** Close above **{swing_high:.2f}** AND Score $\ge 6$ (Trend confirmed) AND Volume $\ge {volume_conf_mult:.1f}$x.
+                                * **BEARISH:** Close below **{swing_low:.2f}** AND Score $\le -6$ (Trend confirmed) AND Volume $\ge {volume_conf_mult:.1f}$x.
                             """)
                         
                         # Display Risk Management and Position Sizing
                         risk_placeholder.markdown(f"""
                             ---
                             **Trade Plan (R:R 1:{risk_rr} | Stop: {atr_stop_mult}x ATR)**
-                            * **Entry Price:** **{latest['close']:.2f}**
+                            * **Current Close Price:** **{latest['close']:.2f}**
+                            * **Swing High/Low ({swing_lookback} bars):** **{swing_high:.2f}** / **{swing_low:.2f}**
                             * **Suggested Stop-Loss:** **{stop_loss if stop_loss else 'N/A'}**
                             * **Suggested Take-Profit:** **{take_profit if take_profit else 'N/A'}**
                         """)
@@ -425,7 +477,7 @@ if st.session_state["access_token"]:
                                 * **Max Quantity:** **{suggested_quantity}** shares
                             """)
                         else:
-                            risk_placeholder.markdown("⚠️ **Position Sizing:** Requires a STRONG BUY/SELL signal (Score outside $\pm 6$) to calculate actionable targets.")
+                            risk_placeholder.markdown("⚠️ **Actionable Trade:** Requires a high score ($|\text{Score}| \ge 6$), **Volume Confirmation**, and a **Price Breakout** to calculate actionable targets.")
 
 
                     except Exception as e:
