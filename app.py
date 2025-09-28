@@ -1,4 +1,4 @@
-# app.py - PRO VERSION 6 (Final Working Code)
+# app.py - PRO VERSION 7 (Final Working Code - Syntax Error Fixed)
 import streamlit as st
 from kiteconnect import KiteConnect
 import pandas as pd
@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
-st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V6)")
+st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V7)")
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
 try:
@@ -69,16 +69,12 @@ if st.session_state["access_token"]:
     with col1:
         symbol = st.text_input("NSE Symbol:", "TCS").upper()
     with col2:
-        # FIX: Ensure explicit 'value=' is used to prevent TypeError
         fast_ema_w = st.number_input("Fast EMA W.", min_value=5, value=20) 
     with col3:
-        # FIX: Ensure explicit 'value=' is used to prevent TypeError
         slow_ema_w = st.number_input("Slow EMA W.", min_value=10, value=50)
     with col4:
-        # FIX: Ensure explicit 'value=' is used to prevent TypeError
         rsi_w = st.number_input("RSI/ATR W.", min_value=5, value=14)
     with col5:
-        # FIX: Ensure explicit 'value=' is used to prevent TypeError
         risk_rr = st.number_input("R:R Ratio (1:X)", min_value=1.0, step=0.5, value=2.0)
 
     colA, colB, colC = st.columns(3)
@@ -330,3 +326,115 @@ if st.session_state["access_token"]:
                                 **DECISION THRESHOLDS (Total Max: $\pm 10$):**
                                 * **STRONG BUY/SELL:** $|Score| \ge 8$
                                 * **BUY/SELL:** $|Score| \ge 4$
+                                * **HOLD/NEUTRAL:** $|Score| < 4$
+                            """)
+                        
+                        # Dynamic Score Card
+                        score_data = pd.DataFrame({
+                            "Component": ["Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)"],
+                            "Current Value": [
+                                f"{latest['fast_ma']:.2f} / {latest['slow_ma']:.2f}",
+                                f"{latest['fast_ma_slope']:.4f}",
+                                f"{latest['macd_hist']:.4f}",
+                                f"{latest['rsi']:.2f} (BB: {latest['bb_low']:.2f}/{latest['bb_high']:.2f})"
+                            ],
+                            "Bullish Condition Met": [
+                                "✅" if flag_ma_cross_up else "❌",
+                                "✅" if flag_slope_pos else "❌",
+                                "✅" if flag_macd_bull else "❌",
+                                "✅" if flag_rsi_bull or (is_bullish_trend and latest['close'] < latest['bb_low']) else "❌"
+                            ],
+                            "Bearish Condition Met": [
+                                "✅" if flag_ma_cross_down else "❌",
+                                "✅" if flag_slope_neg else "❌",
+                                "✅" if flag_macd_bear else "❌",
+                                "✅" if flag_rsi_bear or (is_bearish_trend and latest['close'] > latest['bb_high']) else "❌"
+                            ],
+                            "Points Added (Bullish-Bearish)": [
+                                f"{4 if flag_ma_cross_up else (-4 if flag_ma_cross_down else 0)}",
+                                f"{2 if flag_slope_pos else (-2 if flag_slope_neg else 0)}",
+                                f"{2 if flag_macd_bull else (-2 if flag_macd_bear else 0)}",
+                                f"{1 if reversion_score > 0 else (-1 if reversion_score < 0 else 0)}"
+                            ]
+                        })
+                        score_card_placeholder.dataframe(score_data.set_index("Component"), use_container_width=True)
+
+                        # Live Chart (Visualizing SL/TP)
+                        fig_live = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15, row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI"))
+                        
+                        # CANDLESTICK AND EMAS
+                        fig_live.add_trace(go.Candlestick(x=df_live['date'], open=df_live['open'], high=df_live['high'], low=df_live['low'], close=df_live['close'], name='Price'), row=1, col=1)
+                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['fast_ma'], line=dict(color='blue', width=1), name=f'Fast EMA ({fast_ema_w})'), row=1, col=1)
+                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['slow_ma'], line=dict(color='orange', width=1), name=f'Slow EMA ({slow_ema_w})'), row=1, col=1)
+                        
+                        # Visualize SL/TP only if a strong signal is present
+                        if stop_loss and take_profit:
+                            fig_live.add_hline(y=float(stop_loss), line_dash="dash", line_color="red", row=1, col=1, annotation_text="SL")
+                            fig_live.add_hline(y=float(take_profit), line_dash="dash", line_color="green", row=1, col=1, annotation_text="TP")
+
+                        # MACD AND RSI
+                        fig_live.add_trace(go.Bar(x=df_live['date'], y=df_live['macd_hist'], name='MACD Hist', marker_color='grey'), row=2, col=1)
+                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['rsi'], line=dict(color='brown', width=1), name='RSI'), row=2, col=1)
+                        fig_live.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+                        fig_live.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+
+                        fig_live.update_layout(xaxis_rangeslider_visible=False, height=700)
+                        chart_placeholder.plotly_chart(fig_live, use_container_width=True)
+
+                        table_placeholder.dataframe(df_live.tail(10), use_container_width=True)
+                        rec_placeholder.subheader(f"💡 **{symbol}** Recommendation: **{recommendation}** (Total Score: {score})")
+                        
+                        # --- SCORE BREAKDOWN & CONFLICT ANALYSIS ---
+                        # **FIX APPLIED HERE**: Ensuring the string is properly formatted
+                        targets_placeholder.markdown(f"""
+                            **Score Breakdown:** * **Trend (MA/Slope):** **{trend_score}** / $\pm 6$
+                            * **Momentum (MACD):** **{momentum_score}** / $\pm 2$
+                            * **Reversion (RSI/BB):** **{reversion_score}** / $\pm 2$
+                        """)
+                        
+                        if recommendation == "HOLD/NEUTRAL":
+                            targets_placeholder.warning("Market is balanced. Avoid entry until a dominant force emerges.")
+                            
+                            conflict_col1, conflict_col2 = targets_placeholder.columns(2)
+                            
+                            if abs(trend_score) > 0 and np.sign(trend_score) != np.sign(momentum_score) and abs(momentum_score) > 0:
+                                conflict_col1.markdown("🚫 **CONFLICT:** Trend direction is opposed by Momentum. Wait for alignment.")
+                            elif abs(trend_score) < 4 and abs(momentum_score) < 2:
+                                conflict_col1.markdown("📉 **WEAKNESS:** All components are low-scoring. Range-bound market.")
+                            
+                            conflict_col2.markdown(f"""
+                                **Entry Triggers:**
+                                * **BULLISH:** Trend Score must reach $\ge 4$ (EMA Cross UP).
+                                * **BEARISH:** Trend Score must reach $\le -6$ (EMA Cross DOWN AND Slope confirms trend).
+                            """)
+                        
+                        # Display Risk Management and Position Sizing
+                        risk_placeholder.markdown(f"""
+                            ---
+                            **Trade Plan (R:R 1:{risk_rr} | Stop: {atr_stop_mult}x ATR)**
+                            * **Entry Price:** **{latest['close']:.2f}**
+                            * **Suggested Stop-Loss:** **{stop_loss if stop_loss else 'N/A'}**
+                            * **Suggested Take-Profit:** **{take_profit if take_profit else 'N/A'}**
+                        """)
+                        
+                        if stop_loss and take_profit:
+                            risk_placeholder.markdown(f"""
+                                **Position Sizing (1% Risk):**
+                                * **Risk Amount:** ₹ {risk_per_trade:.2f}
+                                * **Stop Distance:** ₹ {stop_distance:.2f}
+                                * **Max Quantity:** **{suggested_quantity}** shares
+                            """)
+                        else:
+                            risk_placeholder.markdown("⚠️ **Position Sizing:** Requires a STRONG BUY/SELL signal (Score outside $\pm 6$) to calculate actionable targets.")
+
+
+                    except Exception as e:
+                        st.error(f"Error during live data analysis loop: {e}")
+                        st.session_state["live_running"] = False
+                        st.rerun()
+
+                    time.sleep(refresh_interval)
+
+        except Exception as e:
+            st.error(f"Error initializing live analysis: {e}")
+            st.session_state["live_running"] = False
