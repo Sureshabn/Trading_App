@@ -1,49 +1,58 @@
+# app.py
 import streamlit as st
 from kiteconnect import KiteConnect
 import pandas as pd
 import ta
-from datetime import datetime
-
-# ---- Read secrets safely ----
-API_KEY = st.secrets["API_KEY"]
-API_SECRET = st.secrets["API_SECRET"]
-
-# ---- Create KiteConnect instance ----
-kite = KiteConnect(api_key=API_KEY)
-
-# ---- Store token in session_state ----
-if "access_token" not in st.session_state:
-    st.session_state["access_token"] = None
+from datetime import datetime, date, timedelta
 
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
 st.title("📈 Zerodha Live Stock Analysis & Recommendation")
 
-# ---- Step 1: Login URL ----
-st.subheader("🔑 Zerodha Login")
-login_url = kite.login_url()
-st.markdown(f"[Click here to login to Zerodha]({login_url})")
+# ---- Zerodha API credentials from Streamlit Secrets ----
+API_KEY = st.secrets["API_KEY"]
+API_SECRET = st.secrets["API_SECRET"]
 
-# ---- Step 2: Request Token Input ----
-request_token = st.text_input("Paste Request Token after login:")
+kite = KiteConnect(api_key=API_KEY)
 
-if request_token and not st.session_state["access_token"]:
-    try:
-        data = kite.generate_session(request_token, api_secret=API_SECRET)
-        st.session_state["access_token"] = data["access_token"]
-        kite.set_access_token(st.session_state["access_token"])
-        st.success("✅ Access token generated successfully!")
-    except Exception as e:
-        st.error(f"Error generating session: {e}")
+# ---- Session State for Access Token ----
+if "access_token" not in st.session_state:
+    st.session_state["access_token"] = None
+if "token_date" not in st.session_state:
+    st.session_state["token_date"] = None
 
-# ---- Step 3: Fetch Historical Data ----
+# ---- Check if token exists and is valid today ----
+if st.session_state["access_token"] and st.session_state["token_date"] == str(date.today()):
+    kite.set_access_token(st.session_state["access_token"])
+    st.success("✅ Using saved access token for today!")
+
+# ---- Login Section ----
+if not st.session_state["access_token"]:
+    st.subheader("🔑 Zerodha Login")
+    login_url = kite.login_url()
+    st.markdown(f"[Click here to login to Zerodha]({login_url})")
+    request_token = st.text_input("Paste Request Token after login:")
+
+    if request_token:
+        try:
+            data = kite.generate_session(request_token, api_secret=API_SECRET)
+            st.session_state["access_token"] = data["access_token"]
+            st.session_state["token_date"] = str(date.today())
+            kite.set_access_token(st.session_state["access_token"])
+            st.success("✅ Access token generated and saved for today!")
+        except Exception as e:
+            st.error(f"⚠️ Error generating session: {e}")
+
+# ---- Stock Analysis Section ----
 if st.session_state["access_token"]:
+    st.subheader("📊 Stock Analysis")
+
     symbol = st.text_input("Enter NSE Stock Symbol:", "TCS").upper()
-    start_date = st.date_input("Start Date", datetime(2022, 1, 1))
-    end_date = datetime.today()
+    start_date = st.date_input("Start Date", datetime(2022,1,1))
+    end_date = st.date_input("End Date", datetime.today())
 
     if st.button("Run Analysis"):
         try:
-            # Get NSE instruments
+            # Fetch NSE instruments
             instruments = kite.instruments("NSE")
             df_instruments = pd.DataFrame(instruments)
             row = df_instruments[df_instruments["tradingsymbol"] == symbol]
@@ -63,7 +72,7 @@ if st.session_state["access_token"]:
                 if df.empty:
                     st.warning("⚠️ No historical data available for this range.")
                 else:
-                    # ---- Add Technical Indicators ----
+                    # ---- Technical Indicators ----
                     df["fast_ma"] = df["close"].rolling(20).mean()
                     df["slow_ma"] = df["close"].rolling(50).mean()
                     df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
@@ -92,7 +101,7 @@ if st.session_state["access_token"]:
                     )
 
                     # ---- Display Data ----
-                    st.subheader(f"📊 Latest Data for {symbol} ({latest['date'].strftime('%Y-%m-%d')})")
+                    st.subheader(f"Latest Data for {symbol} ({latest['date'].strftime('%Y-%m-%d')})")
                     st.dataframe(df.sort_values("date", ascending=False).tail(50), use_container_width=True)
 
                     st.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
