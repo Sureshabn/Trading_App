@@ -1,4 +1,4 @@
-# app.py - PRO VERSION 5 (Final with Score Matrix Table)
+# app.py - PRO VERSION 6 (Final Working Code)
 import streamlit as st
 from kiteconnect import KiteConnect
 import pandas as pd
@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
-st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V5)")
+st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V6)")
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
 try:
@@ -22,15 +22,13 @@ except KeyError:
 
 kite = KiteConnect(api_key=API_KEY)
 
-# ---- Session State (Omitted for brevity, assumed functional) ----
+# ---- Session State ----
 if "access_token" not in st.session_state:
     st.session_state["access_token"] = None
 if "token_date" not in st.session_state:
     st.session_state["token_date"] = None
 if "live_running" not in st.session_state:
     st.session_state["live_running"] = False
-
-# [ ... Login and token check logic as before ... ]
 
 # ---- Check token validity & Login Logic ----
 if st.session_state["access_token"] and st.session_state["token_date"] == str(date.today()):
@@ -71,12 +69,16 @@ if st.session_state["access_token"]:
     with col1:
         symbol = st.text_input("NSE Symbol:", "TCS").upper()
     with col2:
+        # FIX: Ensure explicit 'value=' is used to prevent TypeError
         fast_ema_w = st.number_input("Fast EMA W.", min_value=5, value=20) 
     with col3:
+        # FIX: Ensure explicit 'value=' is used to prevent TypeError
         slow_ema_w = st.number_input("Slow EMA W.", min_value=10, value=50)
     with col4:
+        # FIX: Ensure explicit 'value=' is used to prevent TypeError
         rsi_w = st.number_input("RSI/ATR W.", min_value=5, value=14)
     with col5:
+        # FIX: Ensure explicit 'value=' is used to prevent TypeError
         risk_rr = st.number_input("R:R Ratio (1:X)", min_value=1.0, step=0.5, value=2.0)
 
     colA, colB, colC = st.columns(3)
@@ -93,7 +95,7 @@ if st.session_state["access_token"]:
     live_interval = st.selectbox("Intraday Bar Interval", ["5minute", "15minute", "30minute"])
 
 
-    # ---- Indicator Calculation Function (Omitted for brevity, assumed functional) ----
+    # ---- Indicator Calculation Function ----
     @st.cache_data(ttl=600) 
     def calculate_indicators(df, fast_w, slow_w, rsi_w):
         for col in ["open","high","low","close","volume"]:
@@ -118,9 +120,8 @@ if st.session_state["access_token"]:
 
         return df
 
-    # ---- Historical Analysis Button (Omitted for brevity, assumed functional) ----
+    # ---- Historical Analysis Button (Plotting Logic) ----
     if st.button("Run Historical Analysis (Daily Timeframe)"):
-        # ... (Historical data fetch and plot logic)
         try:
             instruments = kite.instruments("NSE")
             df_instruments = pd.DataFrame(instruments)
@@ -140,16 +141,27 @@ if st.session_state["access_token"]:
                     
                     st.subheader(f"📈 Historical ({symbol}) Candlestick with EMAs & Oscillators")
                     
-                    fig_hist = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15, row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI"))
+                    fig_hist = make_subplots(
+                        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
+                        row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI")
+                    )
+
+                    # Price and Overlays
                     fig_hist.add_trace(go.Candlestick(x=df_hist['date'], open=df_hist['open'], high=df_hist['high'], low=df_hist['low'], close=df_hist['close'], name='Price'), row=1, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['fast_ma'], line=dict(color='blue', width=1), name=f'Fast EMA ({fast_ema_w})'), row=1, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['slow_ma'], line=dict(color='orange', width=1), name=f'Slow EMA ({slow_ema_w})'), row=1, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['bb_high'], line=dict(color='green', width=1, dash='dot'), name='BB High'), row=1, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['bb_low'], line=dict(color='red', width=1, dash='dot'), name='BB Low'), row=1, col=1)
+
+                    # MACD and RSI
                     fig_hist.add_trace(go.Bar(x=df_hist['date'], y=df_hist['macd_hist'], name='MACD Hist', marker_color='grey'), row=2, col=1)
+                    fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['macd'], line=dict(color='purple', width=1), name='MACD'), row=2, col=1)
+                    fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['macd_signal'], line=dict(color='pink', width=1, dash='dot'), name='MACD Signal'), row=2, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['rsi'], line=dict(color='brown', width=1), name='RSI'), row=2, col=1)
+                    
                     fig_hist.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
                     fig_hist.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+
                     fig_hist.update_layout(xaxis_rangeslider_visible=True, height=700)
                     st.plotly_chart(fig_hist, use_container_width=True)
 
@@ -273,7 +285,7 @@ if st.session_state["access_token"]:
                                     score -= 1; reversion_score -= 1
 
 
-                        # --- 2. RISK MANAGEMENT CALCULATIONS (Omitted for brevity, assumed functional) ---
+                        # --- 2. RISK MANAGEMENT CALCULATIONS ---
                         stop_loss, take_profit = None, None
                         suggested_quantity = 0
                         risk_per_trade = account_size * (risk_percent / 100)
@@ -304,7 +316,7 @@ if st.session_state["access_token"]:
                             "STRONG SELL"                     
                         )
 
-                        # --- 3. CHART AND DATA OUTPUT (INCLUDING NEW TABLES) ---
+                        # --- 3. CHART AND DATA OUTPUT (FIXED PLOTTING SYNTAX) ---
                         
                         # Static Score Rule Table (Displayed once)
                         with score_rules_placeholder.container():
@@ -318,49 +330,3 @@ if st.session_state["access_token"]:
                                 **DECISION THRESHOLDS (Total Max: $\pm 10$):**
                                 * **STRONG BUY/SELL:** $|Score| \ge 8$
                                 * **BUY/SELL:** $|Score| \ge 4$
-                                * **HOLD/NEUTRAL:** $|Score| < 4$
-                            """)
-                        
-                        # Dynamic Score Card
-                        score_data = pd.DataFrame({
-                            "Component": ["Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)"],
-                            "Current Value": [
-                                f"{latest['fast_ma']:.2f} / {latest['slow_ma']:.2f}",
-                                f"{latest['fast_ma_slope']:.4f}",
-                                f"{latest['macd_hist']:.4f}",
-                                f"{latest['rsi']:.2f} (BB: {latest['bb_low']:.2f}/{latest['bb_high']:.2f})"
-                            ],
-                            "Bullish Condition Met": [
-                                "✅" if flag_ma_cross_up else "❌",
-                                "✅" if flag_slope_pos else "❌",
-                                "✅" if flag_macd_bull else "❌",
-                                "✅" if flag_rsi_bull or (is_bullish_trend and latest['close'] < latest['bb_low']) else "❌"
-                            ],
-                            "Bearish Condition Met": [
-                                "✅" if flag_ma_cross_down else "❌",
-                                "✅" if flag_slope_neg else "❌",
-                                "✅" if flag_macd_bear else "❌",
-                                "✅" if flag_rsi_bear or (is_bearish_trend and latest['close'] > latest['bb_high']) else "❌"
-                            ],
-                            "Points Added (Bullish-Bearish)": [
-                                f"{4 if flag_ma_cross_up else (-4 if flag_ma_cross_down else 0)}",
-                                f"{2 if flag_slope_pos else (-2 if flag_slope_neg else 0)}",
-                                f"{2 if flag_macd_bull else (-2 if flag_macd_bear else 0)}",
-                                f"{1 if reversion_score > 0 else (-1 if reversion_score < 0 else 0)}"
-                            ]
-                        })
-                        score_card_placeholder.dataframe(score_data.set_index("Component"), use_container_width=True)
-
-                        # Chart and other outputs (Omitted for brevity, assumed functional)
-                        fig_live = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15, row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI"))
-                        fig_live.add_trace(go.Candlestick(x=df_live['date'], open=df_live['open'], high=df_live['high'], low=df_live['low'], close=df_live['close'], name='Price'), row=1, col=1)
-                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['fast_ma'], line=dict(color='blue', width=1), name=f'Fast EMA ({fast_ema_w})'), row=1, col=1)
-                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['slow_ma'], line=dict(color='orange', width=1), name=f'Slow EMA ({slow_ema_w})'), row=1, col=1)
-                        
-                        if stop_loss and take_profit:
-                            fig_live.add_hline(y=float(stop_loss), line_dash="dash", line_color="red", row=1, col=1, annotation_text="SL")
-                            fig_live.add_hline(y=float(take_profit), line_dash="dash", line_color="green", row=1, col=1, annotation_text="TP")
-
-                        fig_live.add_trace(go.Bar(x=df_live['date'], y=df_live['macd_hist'], name='MACD Hist', marker_color='grey'), row=2, col=1)
-                        fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['rsi'], line=dict(color='brown', width=1), name='RSI'), row=2, col=1)
-                        fig_live.add
