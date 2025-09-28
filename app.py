@@ -5,8 +5,9 @@ import pandas as pd
 import ta
 from datetime import datetime, date, timedelta
 import plotly.graph_objects as go
+import time
 
-st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
+st.set_page_config(page_title="Zerodha Live Stock Analysis", layout="wide")
 st.title("📈 Zerodha Live Stock Analysis & Recommendation")
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
@@ -48,42 +49,38 @@ if st.session_state["access_token"]:
     st.subheader("📊 Stock Analysis")
 
     symbol = st.text_input("Enter NSE Stock Symbol:", "TCS").upper()
-    start_date = st.date_input("Start Date", datetime(2022,1,1))
-    end_date = st.date_input("End Date", datetime.today())
+    refresh_interval = st.slider("Refresh interval (seconds)", 30, 300, 60)
 
-    if st.button("Run Analysis"):
-        try:
-            # Fetch NSE instruments
-            instruments = kite.instruments("NSE")
-            df_instruments = pd.DataFrame(instruments)
-            row = df_instruments[df_instruments["tradingsymbol"] == symbol]
+    if st.button("Start Live Analysis"):
 
-            if row.empty:
-                st.error(f"❌ Symbol {symbol} not found on NSE")
-            else:
-                token = int(row.iloc[0]["instrument_token"])
-                
-                # Try daily historical data first
+        instruments = kite.instruments("NSE")
+        df_instruments = pd.DataFrame(instruments)
+        row = df_instruments[df_instruments["tradingsymbol"] == symbol]
+
+        if row.empty:
+            st.error(f"❌ Symbol {symbol} not found on NSE")
+        else:
+            token = int(row.iloc[0]["instrument_token"])
+
+            chart_placeholder = st.empty()
+            table_placeholder = st.empty()
+            rec_placeholder = st.empty()
+
+            while True:
                 try:
-                    hist = kite.historical_data(token, start_date, end_date, interval="day")
+                    # ---- Fetch last 5 days 5-min candles ----
+                    start_time = datetime.now() - timedelta(days=5)
+                    end_time = datetime.now()
+                    hist = kite.historical_data(token, start_time, end_time, interval="5minute")
                     df = pd.DataFrame(hist)
-                    if len(df) < 50:
-                        raise ValueError("Not enough daily data, switching to 5-min intraday data")
-                except:
-                    # Fallback to intraday 5-min candles for the last 5 days
-                    st.warning("⚠️ Using 5-min intraday data due to limited historical data")
-                    intraday_start = datetime.today() - timedelta(days=5)
-                    hist = kite.historical_data(token, intraday_start, datetime.today(), interval="5minute")
-                    df = pd.DataFrame(hist)
+                    if df.empty:
+                        st.warning("⚠️ No data available")
+                        time.sleep(refresh_interval)
+                        continue
 
-                if df.empty:
-                    st.warning("⚠️ No data available for this symbol.")
-                else:
                     # Ensure numeric columns
                     for col in ["open","high","low","close","volume"]:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
-
-                    # Convert date to datetime
                     df['date'] = pd.to_datetime(df['date'], errors='coerce')
                     df = df.sort_values("date", ascending=False)
 
@@ -98,15 +95,14 @@ if st.session_state["access_token"]:
                     df["bb_high"] = boll.bollinger_hband()
                     df["bb_low"] = boll.bollinger_lband()
 
-                    # Pick the most recent row with all indicators
-                    df_valid = df.dropna(subset=["fast_ma", "slow_ma", "rsi", "macd", "macd_signal", "bb_high", "bb_low"])
+                    # Latest valid row
+                    df_valid = df.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low"])
                     if df_valid.empty:
-                        st.warning("⚠️ Not enough data to calculate all indicators.")
                         latest = df.iloc[0]
                     else:
                         latest = df_valid.iloc[0]
 
-                    # ---- Recommendation Logic ----
+                    # ---- Recommendation ----
                     score = 0
                     if not pd.isna(latest["fast_ma"]) and not pd.isna(latest["slow_ma"]):
                         score += 2 if latest["fast_ma"] > latest["slow_ma"] else -2
@@ -126,7 +122,7 @@ if st.session_state["access_token"]:
                     )
 
                     # ---- Candlestick Chart ----
-                    df_plot = df.sort_values("date")  # ascending for plotting
+                    df_plot = df.sort_values("date")
                     fig = go.Figure()
                     fig.add_trace(go.Candlestick(
                         x=df_plot['date'],
@@ -136,17 +132,18 @@ if st.session_state["access_token"]:
                         close=df_plot['close'],
                         name='Price'
                     ))
-                    fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['fast_ma'], line=dict(color='blue', width=1), name='Fast MA (20)'))
-                    fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['slow_ma'], line=dict(color='orange', width=1), name='Slow MA (50)'))
+                    fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['fast_ma'], line=dict(color='blue', width=1), name='Fast MA'))
+                    fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['slow_ma'], line=dict(color='orange', width=1), name='Slow MA'))
                     fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['bb_high'], line=dict(color='green', width=1, dash='dot'), name='BB High'))
                     fig.add_trace(go.Scatter(x=df_plot['date'], y=df_plot['bb_low'], line=dict(color='red', width=1, dash='dot'), name='BB Low'))
                     fig.update_layout(xaxis_title="Date", yaxis_title="Price", xaxis_rangeslider_visible=False, height=600)
-                    st.plotly_chart(fig, use_container_width=True)
+                    chart_placeholder.plotly_chart(fig, use_container_width=True)
 
-                    # ---- Display Table ----
-                    st.subheader(f"Latest Data for {symbol} ({latest['date'].strftime('%Y-%m-%d %H:%M')})")
-                    st.dataframe(df.head(50), use_container_width=True)
-                    st.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
+                    # ---- Table & Recommendation ----
+                    table_placeholder.dataframe(df.head(50), use_container_width=True)
+                    rec_placeholder.subheader(f"💡 Recommendation: {recommendation} (Score: {score})")
 
-        except Exception as e:
-            st.error(f"Error fetching data: {e}")
+                except Exception as e:
+                    st.error(f"Error fetching data: {e}")
+
+                time.sleep(refresh_interval)
