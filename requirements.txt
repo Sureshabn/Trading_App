@@ -3,3 +3,5 @@ pandas
 yfinance
 alpha_vantage
 ta
+pandas
+kiteconnect
