@@ -22,12 +22,12 @@ if "access_token" not in st.session_state:
 if "token_date" not in st.session_state:
     st.session_state["token_date"] = None
 
-# ---- Check if token exists and is valid today ----
+# ---- Use cached token if today ----
 if st.session_state["access_token"] and st.session_state["token_date"] == str(date.today()):
     kite.set_access_token(st.session_state["access_token"])
     st.success("✅ Using saved access token for today!")
 
-# ---- Login Section ----
+# ---- Zerodha Login ----
 if not st.session_state["access_token"]:
     st.subheader("🔑 Zerodha Login")
     try:
@@ -55,16 +55,20 @@ if st.session_state["access_token"]:
     end_date = st.date_input("End Date", datetime.today())
     refresh_interval = st.slider("Live refresh interval (seconds)", 30, 300, 60)
 
+    # Fetch instruments safely
+    try:
+        instruments = kite.instruments("NSE")
+        df_instruments = pd.DataFrame(instruments)
+    except Exception as e:
+        st.error(f"Error fetching instruments: {e}")
+        instruments = []
+        df_instruments = pd.DataFrame()
+
     # ---- Historical Analysis ----
     if st.button("Run Historical Analysis"):
-        try:
-            instruments = kite.instruments("NSE")
-        except Exception as e:
-            st.error(f"Error fetching instruments: {e}")
-            instruments = []
-
-        if instruments:
-            df_instruments = pd.DataFrame(instruments)
+        if df_instruments.empty:
+            st.warning("No instruments available.")
+        else:
             row = df_instruments[df_instruments["tradingsymbol"] == symbol]
             if row.empty:
                 st.error(f"❌ Symbol {symbol} not found on NSE")
@@ -76,6 +80,7 @@ if st.session_state["access_token"]:
                     if df_hist.empty:
                         st.warning("⚠️ No historical data available")
                     else:
+                        # Numeric conversion
                         for col in ["open", "high", "low", "close", "volume"]:
                             df_hist[col] = pd.to_numeric(df_hist[col], errors='coerce')
                         df_hist['date'] = pd.to_datetime(df_hist['date'], errors='coerce')
@@ -118,14 +123,9 @@ if st.session_state["access_token"]:
 
     # ---- Live Analysis ----
     if st.button("Start Live Analysis"):
-        try:
-            instruments = kite.instruments("NSE")
-        except Exception as e:
-            st.error(f"Error fetching instruments: {e}")
-            instruments = []
-
-        if instruments:
-            df_instruments = pd.DataFrame(instruments)
+        if df_instruments.empty:
+            st.warning("No instruments available.")
+        else:
             row = df_instruments[df_instruments["tradingsymbol"] == symbol]
             if row.empty:
                 st.error(f"❌ Symbol {symbol} not found on NSE")
@@ -161,7 +161,7 @@ if st.session_state["access_token"]:
                         df_live["bb_high"] = boll.bollinger_hband()
                         df_live["bb_low"] = boll.bollinger_lband()
 
-                        df_valid = df_live.dropna(subset=["fast_ma", "slow_ma", "rsi", "macd", "macd_signal", "bb_high", "bb_low"])
+                        df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low"])
                         latest = df_valid.iloc[0] if not df_valid.empty else df_live.iloc[0]
 
                         # Recommendation
