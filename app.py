@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
 
+# ---- Streamlit Page Config ----
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
 st.title("📈 Zerodha Live Stock Analysis & Recommendation")
 
@@ -17,7 +18,7 @@ API_SECRET = st.secrets["API_SECRET"]
 
 kite = KiteConnect(api_key=API_KEY)
 
-# ---- Session State ----
+# ---- Session State for Access Token ----
 if "access_token" not in st.session_state:
     st.session_state["access_token"] = None
 if "token_date" not in st.session_state:
@@ -25,12 +26,12 @@ if "token_date" not in st.session_state:
 if "live_running" not in st.session_state:
     st.session_state["live_running"] = False
 
-# ---- Check token validity ----
+# ---- Check if token exists and is valid today ----
 if st.session_state["access_token"] and st.session_state["token_date"] == str(date.today()):
     kite.set_access_token(st.session_state["access_token"])
     st.success("✅ Using saved access token for today!")
 
-# ---- Zerodha Login ----
+# ---- Login Section ----
 if not st.session_state["access_token"]:
     st.subheader("🔑 Zerodha Login")
     login_url = kite.login_url()
@@ -50,13 +51,12 @@ if not st.session_state["access_token"]:
 # ---- Stock Analysis Section ----
 if st.session_state["access_token"]:
     st.subheader("📊 Stock Analysis")
-
     symbol = st.text_input("Enter NSE Stock Symbol:", "TCS").upper()
-    start_date = st.date_input("Start Date", datetime(2022,1,1))
+    start_date = st.date_input("Start Date", datetime(2022, 1, 1))
     end_date = st.date_input("End Date", datetime.today())
     refresh_interval = st.slider("Live refresh interval (seconds)", 30, 300, 60)
 
-    # ---- Historical Analysis ----
+    # ---- Fetch Historical Analysis ----
     if st.button("Run Historical Analysis"):
         try:
             instruments = kite.instruments("NSE")
@@ -73,7 +73,7 @@ if st.session_state["access_token"]:
                 if df_hist.empty:
                     st.warning("⚠️ No historical data available")
                 else:
-                    for col in ["open","high","low","close","volume"]:
+                    for col in ["open", "high", "low", "close", "volume"]:
                         df_hist[col] = pd.to_numeric(df_hist[col], errors='coerce')
                     df_hist['date'] = pd.to_datetime(df_hist['date'], errors='coerce')
                     df_hist = df_hist.sort_values("date")
@@ -89,41 +89,42 @@ if st.session_state["access_token"]:
                     df_hist["bb_high"] = boll.bollinger_hband()
                     df_hist["bb_low"] = boll.bollinger_lband()
 
-                    # ---- Plotly Chart with MACD + RSI ----
-                    st.subheader("📈 Historical Candlestick with MACD & RSI")
-                    fig_hist = make_subplots(
-                        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
-                        row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI")
-                    )
+                    # ---- Interactive Historical Chart ----
+                    st.subheader("📈 Historical Candlestick Chart")
+                    fig_hist = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                             vertical_spacing=0.15, row_heights=[0.7,0.3],
+                                             subplot_titles=("Price", "MACD & RSI"))
 
+                    # Price Candlestick + MA + BB
                     fig_hist.add_trace(go.Candlestick(
-                        x=df_hist['date'],
-                        open=df_hist['open'],
-                        high=df_hist['high'],
-                        low=df_hist['low'],
-                        close=df_hist['close'],
-                        name='Price'
+                        x=df_hist['date'], open=df_hist['open'], high=df_hist['high'],
+                        low=df_hist['low'], close=df_hist['close'], name='Price'
                     ), row=1, col=1)
-
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['fast_ma'], line=dict(color='blue', width=1), name='Fast MA'), row=1, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['slow_ma'], line=dict(color='orange', width=1), name='Slow MA'), row=1, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['bb_high'], line=dict(color='green', width=1, dash='dot'), name='BB High'), row=1, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['bb_low'], line=dict(color='red', width=1, dash='dot'), name='BB Low'), row=1, col=1)
 
+                    # MACD + RSI
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['macd'], line=dict(color='purple', width=1), name='MACD'), row=2, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['macd_signal'], line=dict(color='pink', width=1, dash='dot'), name='MACD Signal'), row=2, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['rsi'], line=dict(color='brown', width=1), name='RSI'), row=2, col=1)
 
-                    fig_hist.update_layout(xaxis_rangeslider_visible=True, height=700)
+                    fig_hist.update_layout(xaxis_rangeslider_visible=False, height=700)
                     st.plotly_chart(fig_hist, use_container_width=True)
+                    st.dataframe(df_hist.head(50), use_container_width=True)
 
         except Exception as e:
             st.error(f"Error fetching historical data: {e}")
 
-    # ---- Live Analysis ----
+    # ---- Live Analysis Controls ----
     if st.button("Start Live Analysis"):
         st.session_state["live_running"] = True
+    if st.button("Stop Live Analysis"):
+        st.session_state["live_running"] = False
+        st.success("🛑 Live analysis stopped.")
 
+    # ---- Live Analysis Loop ----
     if st.session_state["live_running"]:
         try:
             instruments = kite.instruments("NSE")
@@ -148,7 +149,7 @@ if st.session_state["access_token"]:
                             time.sleep(refresh_interval)
                             continue
 
-                        for col in ["open","high","low","close","volume"]:
+                        for col in ["open", "high", "low", "close", "volume"]:
                             df_live[col] = pd.to_numeric(df_live[col], errors='coerce')
                         df_live['date'] = pd.to_datetime(df_live['date'], errors='coerce')
                         df_live = df_live.sort_values("date")
@@ -164,11 +165,9 @@ if st.session_state["access_token"]:
                         df_live["bb_high"] = boll.bollinger_hband()
                         df_live["bb_low"] = boll.bollinger_lband()
 
-                        # Latest valid row
+                        # Recommendation
                         df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low"])
                         latest = df_valid.iloc[0] if not df_valid.empty else df_live.iloc[0]
-
-                        # Recommendation
                         score = 0
                         if not pd.isna(latest["fast_ma"]) and not pd.isna(latest["slow_ma"]):
                             score += 2 if latest["fast_ma"] > latest["slow_ma"] else -2
@@ -187,7 +186,7 @@ if st.session_state["access_token"]:
                             "STRONG SELL"
                         )
 
-                        # Live Chart with MACD+RSI
+                        # Live Plotly Chart
                         fig_live = make_subplots(
                             rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
                             row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI")
@@ -202,9 +201,12 @@ if st.session_state["access_token"]:
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['slow_ma'], line=dict(color='orange', width=1), name='Slow MA'), row=1, col=1)
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['bb_high'], line=dict(color='green', width=1, dash='dot'), name='BB High'), row=1, col=1)
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['bb_low'], line=dict(color='red', width=1, dash='dot'), name='BB Low'), row=1, col=1)
+
+                        # MACD + RSI
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['macd'], line=dict(color='purple', width=1), name='MACD'), row=2, col=1)
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['macd_signal'], line=dict(color='pink', width=1, dash='dot'), name='MACD Signal'), row=2, col=1)
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['rsi'], line=dict(color='brown', width=1), name='RSI'), row=2, col=1)
+
                         fig_live.update_layout(xaxis_rangeslider_visible=False, height=700)
                         chart_placeholder.plotly_chart(fig_live, use_container_width=True)
 
