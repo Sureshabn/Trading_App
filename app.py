@@ -30,10 +30,13 @@ if st.session_state["access_token"] and st.session_state["token_date"] == str(da
 # ---- Login Section ----
 if not st.session_state["access_token"]:
     st.subheader("🔑 Zerodha Login")
-    login_url = kite.login_url()
-    st.markdown(f"[Click here to login to Zerodha]({login_url})")
-    request_token = st.text_input("Paste Request Token after login:")
+    try:
+        login_url = kite.login_url()
+        st.markdown(f"[Click here to login to Zerodha]({login_url})")
+    except Exception as e:
+        st.error(f"Error generating login URL: {e}")
 
+    request_token = st.text_input("Paste Request Token after login:")
     if request_token:
         try:
             data = kite.generate_session(request_token, api_secret=API_SECRET)
@@ -47,7 +50,6 @@ if not st.session_state["access_token"]:
 # ---- Stock Analysis Section ----
 if st.session_state["access_token"]:
     st.subheader("📊 Stock Analysis")
-
     symbol = st.text_input("Enter NSE Stock Symbol:", "TCS").upper()
     start_date = st.date_input("Start Date", datetime(2022,1,1))
     end_date = st.date_input("End Date", datetime.today())
@@ -66,9 +68,11 @@ if st.session_state["access_token"]:
                 token = int(row.iloc[0]["instrument_token"])
                 hist = kite.historical_data(token, start_date, end_date, interval="day")
                 df_hist = pd.DataFrame(hist)
+
                 if df_hist.empty:
                     st.warning("⚠️ No historical data available")
                 else:
+                    # Numeric columns
                     for col in ["open","high","low","close","volume"]:
                         df_hist[col] = pd.to_numeric(df_hist[col], errors='coerce')
                     df_hist['date'] = pd.to_datetime(df_hist['date'], errors='coerce')
@@ -113,6 +117,11 @@ if st.session_state["access_token"]:
     if st.button("Start Live Analysis"):
         try:
             instruments = kite.instruments("NSE")
+        except Exception as e:
+            st.error(f"Error fetching instruments: {e}")
+            instruments = []
+
+        if instruments:
             df_instruments = pd.DataFrame(instruments)
             row = df_instruments[df_instruments["tradingsymbol"] == symbol]
 
@@ -208,6 +217,3 @@ if st.session_state["access_token"]:
 
                     except Exception as e:
                         st.error(f"Error fetching live data: {e}")
-
-        except Exception as e:
-            st.error(f"Error initializing live analysis: {e}")
