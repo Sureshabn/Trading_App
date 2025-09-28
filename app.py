@@ -13,12 +13,17 @@ st.title("📈 Zerodha Live Stock Analysis & Recommendation (Pro V2)")
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
 # Assuming API_KEY and API_SECRET are securely handled in st.secrets
-API_KEY = st.secrets["API_KEY"]
-API_SECRET = st.secrets["API_SECRET"]
+# NOTE: You must have these variables defined in your Streamlit secrets file (secrets.toml)
+try:
+    API_KEY = st.secrets["API_KEY"]
+    API_SECRET = st.secrets["API_SECRET"]
+except KeyError:
+    st.error("⚠️ Error: API_KEY or API_SECRET not found in Streamlit secrets.")
+    st.stop()
 
 kite = KiteConnect(api_key=API_KEY)
 
-# ---- Session State (Unchanged) ----
+# ---- Session State ----
 if "access_token" not in st.session_state:
     st.session_state["access_token"] = None
 if "token_date" not in st.session_state:
@@ -26,14 +31,18 @@ if "token_date" not in st.session_state:
 if "live_running" not in st.session_state:
     st.session_state["live_running"] = False
 
-# ---- Check token validity (Unchanged) ----
+# ---- Check token validity ----
 if st.session_state["access_token"] and st.session_state["token_date"] == str(date.today()):
-    kite.set_access_token(st.session_state["access_token"])
-    st.success("✅ Using saved access token for today!")
+    try:
+        kite.set_access_token(st.session_state["access_token"])
+        st.success("✅ Using saved access token for today!")
+    except Exception as e:
+        st.error(f"Error setting access token: {e}")
+        st.session_state["access_token"] = None # Invalidate token on error
 
-# ---- Zerodha Login (Unchanged) ----
+
+# ---- Zerodha Login ----
 if not st.session_state["access_token"]:
-    # ... (Login logic omitted for brevity)
     st.subheader("🔑 Zerodha Login")
     login_url = kite.login_url()
     st.markdown(f"[Click here to login to Zerodha]({login_url})")
@@ -46,34 +55,43 @@ if not st.session_state["access_token"]:
             st.session_state["token_date"] = str(date.today())
             kite.set_access_token(st.session_state["access_token"])
             st.success("✅ Access token generated and saved for today!")
+            # Rerun app to continue to the analysis section
+            st.rerun() 
         except Exception as e:
             st.error(f"⚠️ Error generating session: {e}")
 
+# ----------------------------------------------------------------------
 # ---- Stock Analysis Section ----
+# ----------------------------------------------------------------------
 if st.session_state["access_token"]:
     st.subheader("📊 Stock Analysis")
 
-    # --- 1. Flexibility and Parameterization ---
+    # --- 1. Flexibility and Parameterization (ATR, R:R, Indicator Windows) ---
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         symbol = st.text_input("NSE Symbol:", "TCS").upper()
     with col2:
-        fast_ema_w = st.number_input("Fast EMA W.", 20, min_value=5)
+        # FIX: Explicitly using 'value=' to fix TypeError
+        fast_ema_w = st.number_input("Fast EMA W.", min_value=5, value=20) 
     with col3:
-        slow_ema_w = st.number_input("Slow EMA W.", 50, min_value=10)
+        # FIX: Explicitly using 'value='
+        slow_ema_w = st.number_input("Slow EMA W.", min_value=10, value=50)
     with col4:
-        rsi_w = st.number_input("RSI/ATR W.", 14, min_value=5)
+        # FIX: Explicitly using 'value='
+        rsi_w = st.number_input("RSI/ATR W.", min_value=5, value=14)
     with col5:
-        risk_rr = st.number_input("R:R Ratio (1:X)", 2.0, min_value=1.0, step=0.5)
+        # FIX: Explicitly using 'value='
+        risk_rr = st.number_input("R:R Ratio (1:X)", min_value=1.0, step=0.5, value=2.0)
 
     start_date = st.date_input("Historical Start Date", datetime(2022,1,1))
     end_date = st.date_input("Historical End Date", datetime.today())
     refresh_interval = st.slider("Live refresh interval (seconds)", 30, 300, 60)
-    live_interval = st.selectbox("Live Chart Interval", ["5minute", "15minute", "30minute"])
+    live_interval = st.selectbox("Intraday Bar Interval", ["5minute", "15minute", "30minute"])
 
 
     # ---- Indicator Calculation Function (DRY Principle) ----
+    @st.cache_data(ttl=600) # Cache data for 10 minutes
     def calculate_indicators(df, fast_w, slow_w, rsi_w):
         # 1. Exponential Moving Averages (EMA)
         df["fast_ma"] = ta.trend.EMAIndicator(df["close"], window=fast_w).ema_indicator()
@@ -98,9 +116,8 @@ if st.session_state["access_token"]:
 
         return df
 
-    # ---- Historical Analysis (DRY Principle, same plotting logic) ----
+    # ---- Historical Analysis ----
     if st.button("Run Historical Analysis (Daily Timeframe)"):
-        # ... (Historical data fetch, cleanup, and plot logic - similar to V1)
         try:
             instruments = kite.instruments("NSE")
             df_instruments = pd.DataFrame(instruments)
@@ -110,6 +127,7 @@ if st.session_state["access_token"]:
                 st.error(f"❌ Symbol {symbol} not found on NSE")
             else:
                 token = int(row.iloc[0]["instrument_token"])
+                # The historical API only supports daily data for long ranges
                 hist = kite.historical_data(token, start_date, end_date, interval="day")
                 df_hist = pd.DataFrame(hist)
 
@@ -124,7 +142,7 @@ if st.session_state["access_token"]:
                     df_hist = calculate_indicators(df_hist, fast_ema_w, slow_ema_w, rsi_w)
 
                     st.subheader(f"📈 Historical ({symbol}) Candlestick with EMAs & Oscillators")
-                    # ... (Plotly chart creation logic for historical data)
+                    
                     fig_hist = make_subplots(
                         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
                         row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI")
@@ -154,11 +172,10 @@ if st.session_state["access_token"]:
 
 
     # ---- Live Analysis ----
-    if st.button("Start Intraday Bar-Close Analysis"): # Renamed for clarity
+    if st.button("Start Intraday Bar-Close Analysis"):
         st.session_state["live_running"] = True
 
     if st.session_state["live_running"]:
-        # ... (Live analysis loop logic)
         try:
             instruments = kite.instruments("NSE")
             df_instruments = pd.DataFrame(instruments)
@@ -166,16 +183,18 @@ if st.session_state["access_token"]:
 
             if row.empty:
                 st.error(f"❌ Symbol {symbol} not found on NSE")
+                st.session_state["live_running"] = False
+                st.stop()
             else:
                 token = int(row.iloc[0]["instrument_token"])
                 chart_placeholder = st.empty()
                 table_placeholder = st.empty()
                 rec_placeholder = st.empty()
-                targets_placeholder = st.empty() # New placeholder for targets
+                targets_placeholder = st.empty() 
 
                 while st.session_state["live_running"]:
                     try:
-                        # Fetch 5 days of data at the selected interval
+                        # Fetch enough data for indicators to stabilize
                         intraday_start = datetime.now() - timedelta(days=5) 
                         hist = kite.historical_data(token, intraday_start, datetime.now(), interval=live_interval)
                         df_live = pd.DataFrame(hist)
@@ -193,9 +212,17 @@ if st.session_state["access_token"]:
 
                         df_live = calculate_indicators(df_live, fast_ema_w, slow_ema_w, rsi_w)
 
-                        # Latest valid row
+                        # Latest valid row (must have all indicators calculated)
                         df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low", "atr"])
-                        latest = df_valid.iloc[-1] if not df_valid.empty else df_live.iloc[-1] 
+                        
+                        if df_valid.empty:
+                            st.warning("⚠️ Not enough data yet to calculate indicators.")
+                            time.sleep(refresh_interval)
+                            continue
+
+                        latest = df_valid.iloc[-1]
+                        prev = df_valid.iloc[-2] if len(df_valid) >= 2 else None
+
 
                         # --- PROFESSIONAL RECOMMENDATION LOGIC (Weighted Scoring) ---
                         score = 0
@@ -203,55 +230,54 @@ if st.session_state["access_token"]:
                         is_bearish_trend = False
                         
                         # 1. TREND (MAs) - Highest Weight (+/- 4)
-                        if not pd.isna(latest["fast_ma"]) and not pd.isna(latest["slow_ma"]):
-                            if latest["fast_ma"] > latest["slow_ma"]:
-                                score += 4
-                                is_bullish_trend = True
-                            elif latest["fast_ma"] < latest["slow_ma"]:
-                                score -= 4
-                                is_bearish_trend = True
+                        if latest["fast_ma"] > latest["slow_ma"]:
+                            score += 4
+                            is_bullish_trend = True
+                        elif latest["fast_ma"] < latest["slow_ma"]:
+                            score -= 4
+                            is_bearish_trend = True
                         
                         # 2. MOMENTUM (MACD) - Medium Weight (+/- 2)
-                        if not pd.isna(latest["macd"]) and not pd.isna(latest["macd_signal"]):
-                            if latest["macd"] > latest["macd_signal"] and latest["macd_hist"] > 0:
-                                score += 2
-                            elif latest["macd"] < latest["macd_signal"] and latest["macd_hist"] < 0:
-                                score -= 2
+                        # Check for crossover AND positive/negative histogram
+                        if latest["macd"] > latest["macd_signal"] and latest["macd_hist"] > 0:
+                            score += 2
+                        elif latest["macd"] < latest["macd_signal"] and latest["macd_hist"] < 0:
+                            score -= 2
 
                         # 3. REVERSION/EXTREMES (RSI/BB) - Lowest Weight (+/- 1), **only confirms trend-following pullback**
-                        prev = df_valid.iloc[-2] if len(df_valid) >= 2 else None
-                        
-                        # Bullish pullback confirmation (Trend is UP, Price/RSI is LOW)
-                        if is_bullish_trend and prev is not None:
-                            # RSI is rising from oversold region (e.g., under 50)
-                            if latest["rsi"] < 50 and latest["rsi"] > prev["rsi"]:
-                                score += 1
-                            # Price bounced off BB Low
-                            if latest["close"] < latest["bb_low"] and latest["close"] > prev["close"]:
-                                score += 1
+                        if prev is not None:
+                            # Bullish pullback confirmation (Trend is UP, Price/RSI is LOW and reversing)
+                            if is_bullish_trend:
+                                # RSI is rising from the lower half (pullback entry)
+                                if latest["rsi"] < 50 and latest["rsi"] > prev["rsi"]:
+                                    score += 1
+                                # Price bounced off BB Low
+                                if latest["close"] < latest["bb_low"] and latest["close"] > prev["close"]:
+                                    score += 1
 
-                        # Bearish pullback confirmation (Trend is DOWN, Price/RSI is HIGH)
-                        if is_bearish_trend and prev is not None:
-                            # RSI is falling from overbought region (e.g., above 50)
-                            if latest["rsi"] > 50 and latest["rsi"] < prev["rsi"]:
-                                score -= 1
-                            # Price rejected by BB High
-                            if latest["close"] > latest["bb_high"] and latest["close"] < prev["close"]:
-                                score -= 1
+                            # Bearish pullback confirmation (Trend is DOWN, Price/RSI is HIGH and reversing)
+                            elif is_bearish_trend:
+                                # RSI is falling from the upper half (pullback entry)
+                                if latest["rsi"] > 50 and latest["rsi"] < prev["rsi"]:
+                                    score -= 1
+                                # Price rejected by BB High
+                                if latest["close"] > latest["bb_high"] and latest["close"] < prev["close"]:
+                                    score -= 1
+                        
                         
                         # --- RISK MANAGEMENT CALCULATIONS (ATR Based) ---
-                        stop_loss = None
-                        take_profit = None
+                        stop_loss, take_profit = None, None
                         risk_multiple = 2.0 # Standard Stop-Loss distance in ATRs
                         
                         if not pd.isna(latest["atr"]):
-                            # Suggestion is based on current score to determine trade direction
-                            if score >= 3: # Suggested Buy (Bullish)
+                            # Suggestion based on a strong buy signal
+                            if score >= 4: 
                                 stop_loss_price = latest["close"] - (latest["atr"] * risk_multiple)
                                 take_profit_price = latest["close"] + (latest["atr"] * risk_multiple * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
                                 take_profit = f"{take_profit_price:.2f}"
-                            elif score <= -3: # Suggested Sell/Short (Bearish)
+                            # Suggestion based on a strong sell signal
+                            elif score <= -4: 
                                 stop_loss_price = latest["close"] + (latest["atr"] * risk_multiple)
                                 take_profit_price = latest["close"] - (latest["atr"] * risk_multiple * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
@@ -266,7 +292,7 @@ if st.session_state["access_token"]:
                             "STRONG SELL"                     
                         )
 
-                        # Live Chart (Plotly logic similar to Historical)
+                        # Live Chart (Plotly)
                         fig_live = make_subplots(
                             rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
                             row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI")
@@ -301,13 +327,17 @@ if st.session_state["access_token"]:
                                 * **Suggested Take-Profit:** **{take_profit}**
                             """)
                         else:
-                            targets_placeholder.markdown("⚠️ **Risk Management:** No trade signal (Score too low/high) or ATR unavailable.")
+                            targets_placeholder.markdown("⚠️ **Risk Management:** No strong signal (Score $\in [-3, 3]$) or ATR unavailable.")
 
 
                     except Exception as e:
-                        st.error(f"Error fetching live data: {e}")
+                        st.error(f"Error during live data analysis loop: {e}")
+                        # If a runtime error occurs, stop the loop
+                        st.session_state["live_running"] = False
+                        st.rerun()
 
                     time.sleep(refresh_interval)
 
         except Exception as e:
             st.error(f"Error initializing live analysis: {e}")
+            st.session_state["live_running"] = False
