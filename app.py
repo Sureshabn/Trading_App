@@ -323,10 +323,10 @@ if st.session_state["access_token"]:
                         # Base Recommendation (as before)
                         recommendation = (
                             "STRONG BUY" if score >= 8 else 
-                            "BUY" if score >= 4 else          
+                            "BUY" if score >= 4 else   # <--- FIX WAS APPLIED HERE (removed U+00A0)
                             "HOLD/NEUTRAL" if score > -4 else 
-                            "SELL" if score > -8 else          
-                            "STRONG SELL"                      
+                            "SELL" if score > -8 else   
+                            "STRONG SELL"                  
                         )
 
                         # Apply Safeguard Filtering to the strongest signals
@@ -470,6 +470,7 @@ if st.session_state["access_token"]:
                         
                         # --- SCORE BREAKDOWN & CONFLICT ANALYSIS ---
                         targets_placeholder.markdown(f"""
+                            ---
                             **Score Breakdown:** * **Trend (MA/Slope):** **{trend_score}** / $\pm 6$
                             * **Momentum (MACD):** **{momentum_score}** / $\pm 2$
                             * **Reversion (RSI/BB):** **{reversion_score}** / $\pm 2$
