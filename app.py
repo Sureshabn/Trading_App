@@ -7,13 +7,16 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
 import numpy as np
+import pytz # Added for explicit timezone handling (optional but good practice)
+
+# Set the Indian Standard Time (IST) timezone
+IST = pytz.timezone('Asia/Kolkata')
 
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
-st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V8 - SAFEGURADS ADDED)")
+st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V9 - Enhanced Live Safety)")
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
 try:
-    # Using st.secrets assumes you have API_KEY and API_SECRET defined in secrets.toml
     API_KEY = st.secrets["API_KEY"]
     API_SECRET = st.secrets["API_SECRET"]
 except KeyError:
@@ -22,7 +25,7 @@ except KeyError:
 
 kite = KiteConnect(api_key=API_KEY)
 
-# ---- Session State (Simplified for presentation) ----
+# ---- Session State ----
 if "access_token" not in st.session_state: st.session_state["access_token"] = None
 if "token_date" not in st.session_state: st.session_state["token_date"] = None
 if "live_running" not in st.session_state: st.session_state["live_running"] = False
@@ -84,10 +87,10 @@ if st.session_state["access_token"]:
     
     colD, colE = st.columns(2)
     with colD:
-        # NEW: Volume Confirmation Threshold
+        # Volume Confirmation Threshold
         volume_conf_mult = st.number_input("Volume Confirmation Multiplier (e.g., 1.5x ATR Vol)", min_value=1.0, value=1.5, step=0.1)
     with colE:
-        # NEW: Swing High/Low Lookback
+        # Swing High/Low Lookback
         swing_lookback = st.number_input("Swing Lookback Periods (for S/R)", min_value=5, value=10)
 
 
@@ -101,9 +104,12 @@ if st.session_state["access_token"]:
     # ---- Indicator Calculation Function (Updated) ----
     @st.cache_data(ttl=600) 
     def calculate_indicators(df, fast_w, slow_w, rsi_w):
+        # Ensure correct data types
         for col in ["open","high","low","close","volume"]:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+        df['date'] = pd.to_datetime(df['date'], errors='coerce', utc=True)
+        # Convert to local time for display/comparison if needed, but UTC is safer for calculations
+        # df['date'] = df['date'].dt.tz_convert(IST) 
         df = df.sort_values("date")
         
         # EMAs and Slope
@@ -111,7 +117,7 @@ if st.session_state["access_token"]:
         df["slow_ma"] = ta.trend.EMAIndicator(df["close"], window=slow_w).ema_indicator()
         df["fast_ma_slope"] = (df["fast_ma"] - df["fast_ma"].shift(3)) / 3
         
-        # RSI, MACD, BB, ATR (as before)
+        # RSI, MACD, BB, ATR
         df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=rsi_w).rsi()
         macd = ta.trend.MACD(df["close"])
         df["macd"] = macd.macd()
@@ -122,12 +128,12 @@ if st.session_state["access_token"]:
         df["bb_low"] = boll.bollinger_lband()
         df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"], window=rsi_w).average_true_range()
 
-        # NEW: Volume Average (ATR Volume)
+        # Volume Average (ATR Volume)
         df["atr_volume"] = df["volume"].rolling(window=rsi_w).mean()
 
         return df
 
-    # ---- Historical Analysis Button (Logic as before) ----
+    # ---- Historical Analysis Button (Daily) ----
     if st.button("Run Historical Analysis (Daily Timeframe)"):
         try:
             instruments = kite.instruments("NSE")
@@ -138,6 +144,7 @@ if st.session_state["access_token"]:
                 st.error(f"❌ Symbol {symbol} not found on NSE")
             else:
                 token = int(row.iloc[0]["instrument_token"])
+                # Fetching historical data
                 hist = kite.historical_data(token, start_date, end_date, interval="day")
                 df_hist = pd.DataFrame(hist)
 
@@ -148,11 +155,11 @@ if st.session_state["access_token"]:
                     
                     st.subheader(f"📈 Historical ({symbol}) Candlestick with EMAs & Oscillators")
                     
+                    # Charting logic (omitted for brevity, assume previous correct implementation)
                     fig_hist = make_subplots(
                         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
                         row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI")
                     )
-
                     # Price and Overlays
                     fig_hist.add_trace(go.Candlestick(x=df_hist['date'], open=df_hist['open'], high=df_hist['high'], low=df_hist['low'], close=df_hist['close'], name='Price'), row=1, col=1)
                     fig_hist.add_trace(go.Scatter(x=df_hist['date'], y=df_hist['fast_ma'], line=dict(color='blue', width=1), name=f'Fast EMA ({fast_ema_w})'), row=1, col=1)
@@ -181,40 +188,41 @@ if st.session_state["access_token"]:
         st.session_state["live_running"] = True
 
     if st.session_state["live_running"]:
+        
+        # Initialize placeholders once
+        chart_placeholder = st.empty()
+        table_placeholder = st.empty()
+        rec_placeholder = st.empty()
+        targets_placeholder = st.empty() 
+        risk_placeholder = st.empty() 
+        score_rules_placeholder = st.empty()
+        score_card_placeholder = st.empty()
+        debug_placeholder = st.sidebar.empty()
+
         try:
             instruments = kite.instruments("NSE")
             df_instruments = pd.DataFrame(instruments)
             row = df_instruments[df_instruments["tradingsymbol"] == symbol]
 
             if row.empty:
-                st.error(f"❌ Symbol {symbol} not found on NSE")
+                st.error(f"❌ Symbol {symbol} not found on NSE. Stopping live analysis.")
                 st.session_state["live_running"] = False
                 st.stop()
             else:
                 token = int(row.iloc[0]["instrument_token"])
-                chart_placeholder = st.empty()
-                table_placeholder = st.empty()
-                rec_placeholder = st.empty()
-                targets_placeholder = st.empty() 
-                risk_placeholder = st.empty() 
-                score_rules_placeholder = st.empty()
-                score_card_placeholder = st.empty()
-                debug_placeholder = st.sidebar.empty() # Placeholder for debugging info
 
 
                 while st.session_state["live_running"]:
                     try:
-                        # --- FIX APPLIED HERE: Ensure data fetch captures today's full trading session ---
+                        # --- FIX: Set start time to 3 days ago for robust fetching ---
                         today = date.today()
-                        
-                        # Set start time to 3 days ago at midnight to reliably capture the last trading session 
-                        # before today, handling weekends and holidays more robustly.
-                        intraday_start = datetime.combine(today - timedelta(days=3), datetime.min.time()) 
-                        end_time = datetime.now()
-                        
-                        # Display debug info in the sidebar
-                        debug_placeholder.caption(f"Fetching {live_interval} data for Token: {token}\nFrom: {intraday_start.strftime('%Y-%m-%d %H:%M:%S')}\nTo: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                        # Go back 3 days to safely capture the last trading day's close for indicators.
+                        intraday_start = datetime.combine(today - timedelta(days=3), datetime.min.time())
+                        end_time = datetime.now() # Fetch up to the current moment
 
+                        
+                        # Display debug info in the sidebar - CRITICAL FOR DIAGNOSIS
+                        debug_placeholder.caption(f"Fetching {live_interval} data for Token: {token}\nFrom: {intraday_start.strftime('%Y-%m-%d %H:%M:%S')}\nTo: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
                         # Fetch historical data (only closed bars)
                         hist = kite.historical_data(token, intraday_start, end_time, interval=live_interval)
@@ -228,88 +236,70 @@ if st.session_state["access_token"]:
                         # --- END NEW LTP FETCH ---
 
                         if df_live.empty:
-                            st.warning(f"⚠️ No closed {live_interval} data available for {symbol}. Check symbol, trading hours, and API connection. Retrying in {refresh_interval}s...")
+                            st.warning(f"⚠️ No closed {live_interval} data available for {symbol}. Market might not be open yet, or API is delayed. Retrying in {refresh_interval}s...")
                             time.sleep(refresh_interval)
                             continue
 
                         df_live = calculate_indicators(df_live, fast_ema_w, slow_ema_w, rsi_w)
 
+                        # Filter for rows where all essential indicators are calculated (i.e., not NaN)
                         df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low", "atr", "fast_ma_slope", "atr_volume"])
                         
                         if df_valid.empty:
-                            st.warning("⚠️ Not enough data yet to calculate all indicators. Waiting for more closed bars.")
+                            st.warning("⚠️ Not enough history available to calculate all indicators. Waiting for more closed bars.")
                             time.sleep(refresh_interval)
                             continue
 
+                        # Use the latest **complete** candle for all calculations
                         latest = df_valid.iloc[-1]
                         prev = df_valid.iloc[-2] if len(df_valid) >= 2 else None
+                        latest_candle_time = latest['date'].tz_convert(IST).strftime('%Y-%m-%d %H:%M:%S') if latest['date'].tzinfo is not None else latest['date'].strftime('%Y-%m-%d %H:%M:%S')
+                        
 
-
-                        # --- 1. CORE SCORING LOGIC (As before) ---
+                        # --- CORE SCORING LOGIC (Using 'latest' closed bar) ---
                         score = 0
                         is_bullish_trend = False
                         is_bearish_trend = False
-                        
                         trend_score = 0
                         momentum_score = 0
                         reversion_score = 0
+                        flag_ma_cross_up, flag_ma_cross_down, flag_slope_pos, flag_slope_neg, flag_macd_bull, flag_macd_bear, flag_rsi_bull, flag_rsi_bear = [False] * 8
                         
-                        flag_ma_cross_up = False
-                        flag_ma_cross_down = False
-                        flag_slope_pos = False
-                        flag_slope_neg = False
-                        flag_macd_bull = False
-                        flag_macd_bear = False
-                        flag_rsi_bull = False
-                        flag_rsi_bear = False
-                        
-                        
-                        # A. TREND (MAs) - Max +/- 6
+                        # A. TREND (MAs)
                         if latest["fast_ma"] > latest["slow_ma"]:
-                            score += 4; trend_score += 4
-                            is_bullish_trend = True
-                            flag_ma_cross_up = True
+                            score += 4; trend_score += 4; is_bullish_trend = True; flag_ma_cross_up = True
                             if latest["fast_ma_slope"] > 0.001: 
-                                score += 2; trend_score += 2
-                                flag_slope_pos = True
+                                score += 2; trend_score += 2; flag_slope_pos = True
                         elif latest["fast_ma"] < latest["slow_ma"]:
-                            score -= 4; trend_score -= 4
-                            is_bearish_trend = True
-                            flag_ma_cross_down = True
+                            score -= 4; trend_score -= 4; is_bearish_trend = True; flag_ma_cross_down = True
                             if latest["fast_ma_slope"] < -0.001: 
-                                score -= 2; trend_score -= 2
-                                flag_slope_neg = True
+                                score -= 2; trend_score -= 2; flag_slope_neg = True
 
-                        # B. MOMENTUM (MACD) - Max +/- 2
+                        # B. MOMENTUM (MACD)
                         if latest["macd"] > latest["macd_signal"] and latest["macd_hist"] > 0:
-                            score += 2; momentum_score += 2
-                            flag_macd_bull = True
+                            score += 2; momentum_score += 2; flag_macd_bull = True
                         elif latest["macd"] < latest["macd_signal"] and latest["macd_hist"] < 0:
-                            score -= 2; momentum_score -= 2
-                            flag_macd_bear = True
+                            score -= 2; momentum_score -= 2; flag_macd_bear = True
                         else:
                             if latest["macd"] > latest["macd_signal"]: momentum_score += 1 
                             elif latest["macd"] < latest["macd_signal"]: momentum_score -= 1
 
 
-                        # C. REVERSION/EXTREMES (RSI/BB) - Max +/- 2 (Trend-Filtered)
+                        # C. REVERSION/EXTREMES (RSI/BB)
                         if prev is not None:
                             if is_bullish_trend:
                                 if latest["rsi"] < 50 and latest["rsi"] > prev["rsi"]:
-                                    score += 1; reversion_score += 1
-                                    flag_rsi_bull = True
+                                    score += 1; reversion_score += 1; flag_rsi_bull = True
                                 if latest["close"] < latest["bb_low"] and latest["close"] > prev["close"]:
                                     score += 1; reversion_score += 1
                             elif is_bearish_trend:
                                 if latest["rsi"] > 50 and latest["rsi"] < prev["rsi"]:
-                                    score -= 1; reversion_score -= 1
-                                    flag_rsi_bear = True
+                                    score -= 1; reversion_score -= 1; flag_rsi_bear = True
                                 if latest["close"] > latest["bb_high"] and latest["close"] < prev["close"]:
                                     score -= 1; reversion_score -= 1
                                     
-                        # --- 2. NEW SAFEGURADS AND CONFIRMATION LOGIC ---
+                        # --- SAFEGURADS AND CONFIRMATION LOGIC ---
                         
-                        # Calculate Swing High/Low (Price Action Safeguard)
                         df_lookback = df_valid.iloc[-swing_lookback-1:-1] # Look at the bars preceding the current bar
                         swing_high = df_lookback["high"].max() if not df_lookback.empty else latest["high"]
                         swing_low = df_lookback["low"].min() if not df_lookback.empty else latest["low"]
@@ -322,7 +312,8 @@ if st.session_state["access_token"]:
                                 is_volume_confirmed = True
 
                         is_breakout_confirmed = False
-                        current_price_for_breakout = ltp if ltp is not None else latest["close"] # Use LTP for breakout check
+                        # Use LTP for the breakout check as it's the most current price
+                        current_price_for_breakout = ltp if ltp is not None else latest["close"] 
                         
                         if is_bullish_trend and current_price_for_breakout > swing_high:
                             is_breakout_confirmed = True
@@ -330,9 +321,8 @@ if st.session_state["access_token"]:
                             is_breakout_confirmed = True
                         
                         
-                        # --- 3. FINAL RECOMMENDATION (Updated with Safeguards) ---
+                        # --- FINAL RECOMMENDATION ---
                         
-                        # Base Recommendation (as before)
                         recommendation = (
                             "STRONG BUY" if score >= 8 else 
                             "BUY" if score >= 4 else   
@@ -343,31 +333,33 @@ if st.session_state["access_token"]:
 
                         # Apply Safeguard Filtering to the strongest signals
                         if recommendation in ["STRONG BUY", "BUY"] and score >= 6:
-                            if not is_volume_confirmed:
-                                recommendation = "BUY (Low Volume)"
-                            if not is_breakout_confirmed:
-                                recommendation = "BUY (No Breakout)"
+                            if not is_volume_confirmed and not is_breakout_confirmed:
+                                recommendation = "BUY (Wait for Volume & Breakout)"
+                            elif not is_volume_confirmed:
+                                recommendation = "BUY (Low Volume Confirmation)"
+                            elif not is_breakout_confirmed:
+                                recommendation = "BUY (No Breakout Yet)"
                         
                         if recommendation in ["STRONG SELL", "SELL"] and score <= -6:
-                            if not is_volume_confirmed:
-                                recommendation = "SELL (Low Volume)"
-                            if not is_breakout_confirmed:
-                                recommendation = "SELL (No Breakout)"
+                            if not is_volume_confirmed and not is_breakout_confirmed:
+                                recommendation = "SELL (Wait for Volume & Breakout)"
+                            elif not is_volume_confirmed:
+                                recommendation = "SELL (Low Volume Confirmation)"
+                            elif not is_breakout_confirmed:
+                                recommendation = "SELL (No Breakout Yet)"
 
 
-                        # --- 4. RISK MANAGEMENT CALCULATIONS (As before) ---
+                        # --- RISK MANAGEMENT CALCULATIONS ---
                         stop_loss, take_profit = None, None
                         suggested_quantity = 0
                         risk_per_trade = account_size * (risk_percent / 100)
                         stop_distance = latest["atr"] * atr_stop_mult
+                        entry_price = current_price_for_breakout # Use the most recent price for position sizing
                         
-                        if not pd.isna(latest["atr"]):
-                            if stop_distance > 0:
-                                suggested_quantity = int(risk_per_trade / stop_distance)
-                                if suggested_quantity < 1: suggested_quantity = 1
+                        if not pd.isna(latest["atr"]) and stop_distance > 0:
+                            suggested_quantity = int(risk_per_trade / stop_distance)
+                            if suggested_quantity < 1: suggested_quantity = 1
 
-                            entry_price = ltp if ltp is not None else latest["close"]
-                                
                             if score >= 6 and is_breakout_confirmed and is_volume_confirmed: 
                                 stop_loss_price = entry_price - stop_distance
                                 take_profit_price = entry_price + (stop_distance * risk_rr)
@@ -380,9 +372,8 @@ if st.session_state["access_token"]:
                                 take_profit = f"{take_profit_price:.2f}"
 
                         
-                        # --- 5. CHART AND DATA OUTPUT ---
+                        # --- CHART AND DATA OUTPUT ---
                         
-                        # Static Score Rule Table (As before)
                         with score_rules_placeholder.container():
                             st.markdown("### 🚦 Score Matrix Rules & Thresholds")
                             st.table(pd.DataFrame({
@@ -397,31 +388,31 @@ if st.session_state["access_token"]:
                                 * **HOLD/NEUTRAL:** $|Score| < 4$
                             """)
                         
-                        # Dynamic Score Card (Updated with Volume Data)
+                        # Dynamic Score Card 
                         score_card_placeholder.dataframe(pd.DataFrame({
-                            "Component": ["Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)", "Volume Ratio (New)"],
+                            "Component": ["Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)", "Volume Ratio"],
                             "Current Value": [
                                 f"{latest['fast_ma']:.2f} / {latest['slow_ma']:.2f}",
                                 f"{latest['fast_ma_slope']:.4f}",
                                 f"{latest['macd_hist']:.4f}",
                                 f"{latest['rsi']:.2f} (BB: {latest['bb_low']:.2f}/{latest['bb_high']:.2f})",
-                                f"{volume_ratio:.2f}x (ATR: {latest['atr_volume']:.0f})"
+                                f"{volume_ratio:.2f}x (ATR Vol: {latest['atr_volume']:.0f})"
                             ],
-                            "Bullish Condition Met": [
+                            "Bullish Met": [
                                 "✅" if flag_ma_cross_up else "❌",
                                 "✅" if flag_slope_pos else "❌",
                                 "✅" if flag_macd_bull else "❌",
                                 "✅" if flag_rsi_bull or (is_bullish_trend and latest['close'] < latest['bb_low']) else "❌",
                                 "✅" if is_volume_confirmed else "❌"
                             ],
-                            "Bearish Condition Met": [
+                            "Bearish Met": [
                                 "✅" if flag_ma_cross_down else "❌",
                                 "✅" if flag_slope_neg else "❌",
                                 "✅" if flag_macd_bear else "❌",
                                 "✅" if flag_rsi_bear or (is_bearish_trend and latest['close'] > latest['bb_high']) else "❌",
                                 "✅" if is_volume_confirmed else "❌"
                             ],
-                            "Points Added (Bullish-Bearish)": [
+                            "Points": [
                                 f"{4 if flag_ma_cross_up else (-4 if flag_ma_cross_down else 0)}",
                                 f"{2 if flag_slope_pos else (-2 if flag_slope_neg else 0)}",
                                 f"{2 if flag_macd_bull else (-2 if flag_macd_bear else 0)}",
@@ -438,11 +429,10 @@ if st.session_state["access_token"]:
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['fast_ma'], line=dict(color='blue', width=1), name=f'Fast EMA ({fast_ema_w})'), row=1, col=1)
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['slow_ma'], line=dict(color='orange', width=1), name=f'Slow EMA ({slow_ema_w})'), row=1, col=1)
                         
-                        # NEW: Add Live LTP marker and line
-                        entry_price = ltp if ltp is not None else latest["close"]
+                        # Add Live LTP marker and line
                         if ltp is not None:
                             fig_live.add_trace(go.Scatter(
-                                x=[datetime.now()], 
+                                x=[datetime.now(IST)], 
                                 y=[ltp], 
                                 mode='markers', 
                                 name='LTP (Live)', 
@@ -464,7 +454,7 @@ if st.session_state["access_token"]:
                             fig_live.add_hline(y=float(stop_loss), line_dash="dash", line_color="red", row=1, col=1, annotation_text="SL")
                             fig_live.add_hline(y=float(take_profit), line_dash="dash", line_color="green", row=1, col=1, annotation_text="TP")
                         
-                        # NEW: Visualize Swing High/Low
+                        # Visualize Swing High/Low
                         fig_live.add_hline(y=swing_high, line_dash="dash", line_color="purple", row=1, col=1, annotation_text="Swing High")
                         fig_live.add_hline(y=swing_low, line_dash="dash", line_color="brown", row=1, col=1, annotation_text="Swing Low")
 
@@ -478,8 +468,13 @@ if st.session_state["access_token"]:
                         fig_live.update_layout(xaxis_rangeslider_visible=False, height=700)
                         chart_placeholder.plotly_chart(fig_live, use_container_width=True)
 
+                        # Display the tail of the data
                         table_placeholder.dataframe(df_live.tail(10), use_container_width=True)
+                        
+                        # Display Recommendation and Candle Time
                         rec_placeholder.subheader(f"💡 **{symbol}** Recommendation: **{recommendation}** (Total Score: {score})")
+                        # ADDED: This caption is crucial for diagnosing the delay issue.
+                        rec_placeholder.caption(f"Calculations based on **{live_interval}** candle closed at: **{latest_candle_time}** (LTP: ₹{entry_price:.2f})")
                         
                         # --- SCORE BREAKDOWN & CONFLICT ANALYSIS ---
                         targets_placeholder.markdown(f"""
@@ -489,8 +484,8 @@ if st.session_state["access_token"]:
                             * **Reversion (RSI/BB):** **{reversion_score}** / $\pm 2$
                         """)
                         
-                        if recommendation == "HOLD/NEUTRAL":
-                            targets_placeholder.warning("Market is balanced. Avoid entry until a dominant force emerges.")
+                        if recommendation == "HOLD/NEUTRAL" or "Wait for" in recommendation:
+                            targets_placeholder.warning("Market is balanced or awaiting confirmation. Avoid entry.")
                             
                             conflict_col1, conflict_col2 = targets_placeholder.columns(2)
                             
@@ -499,18 +494,18 @@ if st.session_state["access_token"]:
                             elif abs(trend_score) < 4 and abs(momentum_score) < 2:
                                 conflict_col1.markdown("📉 **WEAKNESS:** All components are low-scoring. Range-bound market.")
                             
-                            targets_price = current_price_for_breakout # Use the current price/LTP for target setting
+                            targets_price = current_price_for_breakout 
                             conflict_col2.markdown(f"""
-                                **Entry Triggers (Current Price: {targets_price:.2f}):**
-                                * **BULLISH:** Close above **{swing_high:.2f}** AND Score $\ge 6$ (Trend confirmed) AND Volume $\ge {volume_conf_mult:.1f}$x.
-                                * **BEARISH:** Close below **{swing_low:.2f}** AND Score $\le -6$ (Trend confirmed) AND Volume $\ge {volume_conf_mult:.1f}$x.
+                                **Entry Triggers (Current Price/LTP: {targets_price:.2f}):**
+                                * **BULLISH:** Close above **{swing_high:.2f}** AND Score $\ge 6$ AND Volume $\ge {volume_conf_mult:.1f}$x.
+                                * **BEARISH:** Close below **{swing_low:.2f}** AND Score $\le -6$ AND Volume $\ge {volume_conf_mult:.1f}$x.
                             """)
                         
                         # Display Risk Management and Position Sizing
                         risk_placeholder.markdown(f"""
                             ---
                             **Trade Plan (R:R 1:{risk_rr} | Stop: {atr_stop_mult}x ATR)**
-                            * **Current Close Price:** **{entry_price:.2f}** (Using LTP/Last Close)
+                            * **Entry Price (LTP):** **{entry_price:.2f}**
                             * **Swing High/Low ({swing_lookback} bars):** **{swing_high:.2f}** / **{swing_low:.2f}**
                             * **Suggested Stop-Loss:** **{stop_loss if stop_loss else 'N/A'}**
                             * **Suggested Take-Profit:** **{take_profit if take_profit else 'N/A'}**
@@ -530,7 +525,7 @@ if st.session_state["access_token"]:
                     except Exception as e:
                         st.error(f"Error during live data analysis loop: {e}. Stopping live analysis.")
                         st.session_state["live_running"] = False
-                        # st.rerun() # Removed for stability
+                        st.exception(e) # Display full traceback for better debugging
 
                     time.sleep(refresh_interval)
 
