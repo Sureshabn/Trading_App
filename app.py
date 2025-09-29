@@ -202,9 +202,13 @@ if st.session_state["access_token"]:
 
                 while st.session_state["live_running"]:
                     try:
+                        # --- FIX APPLIED HERE: Ensure data fetch captures today's full trading session ---
+                        today = date.today()
+                        # Set start time to 2 days ago at midnight to reliably capture Friday's close 
+                        # and all of today (Monday), correctly handling the weekend gap.
+                        intraday_start = datetime.combine(today - timedelta(days=2), datetime.min.time())
+                        
                         # Fetch historical data (only closed bars)
-                        intraday_start = datetime.now() - timedelta(days=5) 
-                        # Using datetime.now() as end_time ensures we fetch up to the last CLOSED bar
                         hist = kite.historical_data(token, intraday_start, datetime.now(), interval=live_interval)
                         df_live = pd.DataFrame(hist)
                         
@@ -323,7 +327,7 @@ if st.session_state["access_token"]:
                         # Base Recommendation (as before)
                         recommendation = (
                             "STRONG BUY" if score >= 8 else 
-                            "BUY" if score >= 4 else   # <--- FIX WAS APPLIED HERE (removed U+00A0)
+                            "BUY" if score >= 4 else   
                             "HOLD/NEUTRAL" if score > -4 else 
                             "SELL" if score > -8 else   
                             "STRONG SELL"                  
@@ -427,6 +431,7 @@ if st.session_state["access_token"]:
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['slow_ma'], line=dict(color='orange', width=1), name=f'Slow EMA ({slow_ema_w})'), row=1, col=1)
                         
                         # NEW: Add Live LTP marker and line
+                        entry_price = ltp if ltp is not None else latest["close"]
                         if ltp is not None:
                             fig_live.add_trace(go.Scatter(
                                 x=[datetime.now()], 
