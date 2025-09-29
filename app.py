@@ -1,4 +1,3 @@
-# app.py - PRO VERSION 8 (Final with Volume, Liquidity, and Price Action Safeguards)
 import streamlit as st
 from kiteconnect import KiteConnect
 import pandas as pd
@@ -14,6 +13,7 @@ st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V8 - SAFEGURADS ADDED)
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
 try:
+    # Using st.secrets assumes you have API_KEY and API_SECRET defined in secrets.toml
     API_KEY = st.secrets["API_KEY"]
     API_SECRET = st.secrets["API_SECRET"]
 except KeyError:
@@ -202,10 +202,19 @@ if st.session_state["access_token"]:
 
                 while st.session_state["live_running"]:
                     try:
+                        # Fetch historical data (only closed bars)
                         intraday_start = datetime.now() - timedelta(days=5) 
+                        # Using datetime.now() as end_time ensures we fetch up to the last CLOSED bar
                         hist = kite.historical_data(token, intraday_start, datetime.now(), interval=live_interval)
                         df_live = pd.DataFrame(hist)
                         
+                        # --- NEW: Fetch Live Quote (LTP) ---
+                        ltp = None
+                        quotes = kite.quote([f'NSE:{symbol}'])
+                        if f'NSE:{symbol}' in quotes:
+                            ltp = quotes[f'NSE:{symbol}']['last_price']
+                        # --- END NEW LTP FETCH ---
+
                         if df_live.empty:
                             st.warning("⚠️ No data available")
                             time.sleep(refresh_interval)
@@ -301,9 +310,11 @@ if st.session_state["access_token"]:
                                 is_volume_confirmed = True
 
                         is_breakout_confirmed = False
-                        if is_bullish_trend and latest["close"] > swing_high:
+                        current_price_for_breakout = ltp if ltp is not None else latest["close"] # Use LTP for breakout check
+                        
+                        if is_bullish_trend and current_price_for_breakout > swing_high:
                             is_breakout_confirmed = True
-                        elif is_bearish_trend and latest["close"] < swing_low:
+                        elif is_bearish_trend and current_price_for_breakout < swing_low:
                             is_breakout_confirmed = True
                         
                         
@@ -312,10 +323,10 @@ if st.session_state["access_token"]:
                         # Base Recommendation (as before)
                         recommendation = (
                             "STRONG BUY" if score >= 8 else 
-                            "BUY" if score >= 4 else          
+                            "BUY" if score >= 4 else          
                             "HOLD/NEUTRAL" if score > -4 else 
-                            "SELL" if score > -8 else         
-                            "STRONG SELL"                     
+                            "SELL" if score > -8 else          
+                            "STRONG SELL"                      
                         )
 
                         # Apply Safeguard Filtering to the strongest signals
@@ -343,14 +354,16 @@ if st.session_state["access_token"]:
                                 suggested_quantity = int(risk_per_trade / stop_distance)
                                 if suggested_quantity < 1: suggested_quantity = 1
 
+                            entry_price = ltp if ltp is not None else latest["close"]
+                                
                             if score >= 6 and is_breakout_confirmed and is_volume_confirmed: 
-                                stop_loss_price = latest["close"] - stop_distance
-                                take_profit_price = latest["close"] + (stop_distance * risk_rr)
+                                stop_loss_price = entry_price - stop_distance
+                                take_profit_price = entry_price + (stop_distance * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
                                 take_profit = f"{take_profit_price:.2f}"
                             elif score <= -6 and is_breakout_confirmed and is_volume_confirmed: 
-                                stop_loss_price = latest["close"] + stop_distance
-                                take_profit_price = latest["close"] - (stop_distance * risk_rr)
+                                stop_loss_price = entry_price + stop_distance
+                                take_profit_price = entry_price - (stop_distance * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
                                 take_profit = f"{take_profit_price:.2f}"
 
@@ -373,7 +386,7 @@ if st.session_state["access_token"]:
                             """)
                         
                         # Dynamic Score Card (Updated with Volume Data)
-                        score_data = pd.DataFrame({
+                        score_card_placeholder.dataframe(pd.DataFrame({
                             "Component": ["Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)", "Volume Ratio (New)"],
                             "Current Value": [
                                 f"{latest['fast_ma']:.2f} / {latest['slow_ma']:.2f}",
@@ -403,8 +416,7 @@ if st.session_state["access_token"]:
                                 f"{1 if reversion_score > 0 else (-1 if reversion_score < 0 else 0)}",
                                 "N/A"
                             ]
-                        })
-                        score_card_placeholder.dataframe(score_data.set_index("Component"), use_container_width=True)
+                        }).set_index("Component"), use_container_width=True)
 
                         # Live Chart (Visualizing SL/TP and S/R)
                         fig_live = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15, row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI"))
@@ -414,6 +426,26 @@ if st.session_state["access_token"]:
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['fast_ma'], line=dict(color='blue', width=1), name=f'Fast EMA ({fast_ema_w})'), row=1, col=1)
                         fig_live.add_trace(go.Scatter(x=df_live['date'], y=df_live['slow_ma'], line=dict(color='orange', width=1), name=f'Slow EMA ({slow_ema_w})'), row=1, col=1)
                         
+                        # NEW: Add Live LTP marker and line
+                        if ltp is not None:
+                            fig_live.add_trace(go.Scatter(
+                                x=[datetime.now()], 
+                                y=[ltp], 
+                                mode='markers', 
+                                name='LTP (Live)', 
+                                marker=dict(size=10, color='lime', symbol='diamond')), 
+                                row=1, col=1)
+                            
+                            fig_live.add_hline(
+                                y=ltp, 
+                                line_dash="solid", 
+                                line_color="lime", 
+                                line_width=1, 
+                                row=1, col=1, 
+                                annotation_text=f"LTP: {ltp:.2f}", 
+                                annotation_position="top left"
+                            )
+
                         # Visualize SL/TP and S/R
                         if stop_loss and take_profit:
                             fig_live.add_hline(y=float(stop_loss), line_dash="dash", line_color="red", row=1, col=1, annotation_text="SL")
@@ -453,8 +485,9 @@ if st.session_state["access_token"]:
                             elif abs(trend_score) < 4 and abs(momentum_score) < 2:
                                 conflict_col1.markdown("📉 **WEAKNESS:** All components are low-scoring. Range-bound market.")
                             
+                            targets_price = current_price_for_breakout # Use the current price/LTP for target setting
                             conflict_col2.markdown(f"""
-                                **Entry Triggers:**
+                                **Entry Triggers (Current Price: {targets_price:.2f}):**
                                 * **BULLISH:** Close above **{swing_high:.2f}** AND Score $\ge 6$ (Trend confirmed) AND Volume $\ge {volume_conf_mult:.1f}$x.
                                 * **BEARISH:** Close below **{swing_low:.2f}** AND Score $\le -6$ (Trend confirmed) AND Volume $\ge {volume_conf_mult:.1f}$x.
                             """)
@@ -463,7 +496,7 @@ if st.session_state["access_token"]:
                         risk_placeholder.markdown(f"""
                             ---
                             **Trade Plan (R:R 1:{risk_rr} | Stop: {atr_stop_mult}x ATR)**
-                            * **Current Close Price:** **{latest['close']:.2f}**
+                            * **Current Close Price:** **{entry_price:.2f}** (Using LTP/Last Close)
                             * **Swing High/Low ({swing_lookback} bars):** **{swing_high:.2f}** / **{swing_low:.2f}**
                             * **Suggested Stop-Loss:** **{stop_loss if stop_loss else 'N/A'}**
                             * **Suggested Take-Profit:** **{take_profit if take_profit else 'N/A'}**
