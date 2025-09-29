@@ -93,6 +93,7 @@ if st.session_state["access_token"]:
 
     start_date = st.date_input("Historical Start Date", datetime(2022,1,1))
     end_date = st.date_input("Historical End Date", datetime.today())
+    # Recommended minimum is 30, increased to 60 for stability
     refresh_interval = st.slider("Live refresh interval (seconds)", 30, 300, 60)
     live_interval = st.selectbox("Intraday Bar Interval", ["5minute", "15minute", "30minute"])
 
@@ -198,18 +199,25 @@ if st.session_state["access_token"]:
                 risk_placeholder = st.empty() 
                 score_rules_placeholder = st.empty()
                 score_card_placeholder = st.empty()
+                debug_placeholder = st.sidebar.empty() # Placeholder for debugging info
 
 
                 while st.session_state["live_running"]:
                     try:
                         # --- FIX APPLIED HERE: Ensure data fetch captures today's full trading session ---
                         today = date.today()
-                        # Set start time to 2 days ago at midnight to reliably capture Friday's close 
-                        # and all of today (Monday), correctly handling the weekend gap.
-                        intraday_start = datetime.combine(today - timedelta(days=2), datetime.min.time())
                         
+                        # Set start time to 3 days ago at midnight to reliably capture the last trading session 
+                        # before today, handling weekends and holidays more robustly.
+                        intraday_start = datetime.combine(today - timedelta(days=3), datetime.min.time()) 
+                        end_time = datetime.now()
+                        
+                        # Display debug info in the sidebar
+                        debug_placeholder.caption(f"Fetching {live_interval} data for Token: {token}\nFrom: {intraday_start.strftime('%Y-%m-%d %H:%M:%S')}\nTo: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+
                         # Fetch historical data (only closed bars)
-                        hist = kite.historical_data(token, intraday_start, datetime.now(), interval=live_interval)
+                        hist = kite.historical_data(token, intraday_start, end_time, interval=live_interval)
                         df_live = pd.DataFrame(hist)
                         
                         # --- NEW: Fetch Live Quote (LTP) ---
@@ -220,7 +228,7 @@ if st.session_state["access_token"]:
                         # --- END NEW LTP FETCH ---
 
                         if df_live.empty:
-                            st.warning("⚠️ No data available")
+                            st.warning(f"⚠️ No closed {live_interval} data available for {symbol}. Check symbol, trading hours, and API connection. Retrying in {refresh_interval}s...")
                             time.sleep(refresh_interval)
                             continue
 
@@ -229,7 +237,7 @@ if st.session_state["access_token"]:
                         df_valid = df_live.dropna(subset=["fast_ma","slow_ma","rsi","macd","macd_signal","bb_high","bb_low", "atr", "fast_ma_slope", "atr_volume"])
                         
                         if df_valid.empty:
-                            st.warning("⚠️ Not enough data yet to calculate all indicators.")
+                            st.warning("⚠️ Not enough data yet to calculate all indicators. Waiting for more closed bars.")
                             time.sleep(refresh_interval)
                             continue
 
@@ -520,9 +528,9 @@ if st.session_state["access_token"]:
 
 
                     except Exception as e:
-                        st.error(f"Error during live data analysis loop: {e}")
+                        st.error(f"Error during live data analysis loop: {e}. Stopping live analysis.")
                         st.session_state["live_running"] = False
-                        st.rerun()
+                        # st.rerun() # Removed for stability
 
                     time.sleep(refresh_interval)
 
