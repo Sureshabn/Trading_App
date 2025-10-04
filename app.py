@@ -154,22 +154,22 @@ if st.session_state["access_token"]:
     # ---- NEW: MTFA (Multi-Timeframe Analysis) Function ----
     # ======================================================================
     @st.cache_data(ttl=3600) # Cache for 1 hour as daily trend doesn't change quickly
-    def get_long_term_trend(kite_api, token, fast_w, slow_w):
+    # FIX: Prepend with an underscore to prevent Streamlit from hashing the KiteConnect object
+    def get_long_term_trend(_kite_api, token, fast_w, slow_w):
         """Fetches Daily data and determines the long-term trend based on EMA cross."""
         try:
             # Fetch data for the last 150 days (more than enough for 50/20 EMA)
             start_date = date.today() - timedelta(days=150)
             end_date = date.today() 
             
-            hist_daily = kite_api.historical_data(token, start_date, end_date, interval="day")
+            # Use the corrected argument name here
+            hist_daily = _kite_api.historical_data(token, start_date, end_date, interval="day")
             df_daily = pd.DataFrame(hist_daily)
             
             if df_daily.empty:
                 return "UNKNOWN"
 
             # Calculate only the required EMAs
-            # Note: The daily MA window should ideally be higher (e.g., 50/200) for long-term, 
-            # but we use the user's input (20/50) for consistency across timeframes.
             df_daily["fast_ma"] = ta.trend.EMAIndicator(df_daily["close"], window=fast_w).ema_indicator()
             df_daily["slow_ma"] = ta.trend.EMAIndicator(df_daily["close"], window=slow_w).ema_indicator()
             
@@ -267,6 +267,7 @@ if st.session_state["access_token"]:
                 token = int(row.iloc[0]["instrument_token"])
                 
                 # --- NEW: Get Long-Term Trend before the loop ---
+                # NOTE: The function call uses 'kite', but the cached function definition uses '_kite_api' 
                 st.session_state["long_term_trend"] = get_long_term_trend(kite, token, fast_ema_w, slow_ema_w)
                 # --- END NEW: Get Long-Term Trend ---
 
@@ -444,13 +445,13 @@ if st.session_state["access_token"]:
                             suggested_quantity = int(risk_per_trade / stop_distance)
                             if suggested_quantity < 1: suggested_quantity = 1
 
-                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK
+                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK AND MTFA CHECK
                             if not is_overridden and not is_mtfa_conflict and score >= 6 and is_breakout_confirmed and is_volume_confirmed: 
                                 stop_loss_price = entry_price - stop_distance
                                 take_profit_price = entry_price + (stop_distance * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
                                 take_profit = f"{take_profit_price:.2f}"
-                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK
+                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK AND MTFA CHECK
                             elif not is_overridden and not is_mtfa_conflict and score <= -6 and is_breakout_confirmed and is_volume_confirmed: 
                                 stop_loss_price = entry_price + stop_distance
                                 take_profit_price = entry_price - (stop_distance * risk_rr)
