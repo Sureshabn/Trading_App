@@ -30,7 +30,7 @@ if "access_token" not in st.session_state: st.session_state["access_token"] = No
 if "token_date" not in st.session_state: st.session_state["token_date"] = None
 if "live_running" not in st.session_state: st.session_state["live_running"] = False
 # NEW: Store Daily Trend
-if "daily_trend" not in st.session_state: st.session_state["daily_trend"] = "N/A"
+if "daily_trend" not in st.session_state: st.session_state["daily_trend"] = None
 
 # [ ... Login and token check logic as before ... ]
 if st.session_state["access_token"] and st.session_state["token_date"] == str(date.today()):
@@ -149,12 +149,12 @@ if st.session_state["access_token"]:
         df["atr_volume"] = df["volume"].rolling(window=rsi_w).mean()
 
         return df
-        
-    # NEW: Function to get Daily Trend
+
+    # NEW: Function to get Daily Trend (For MTFA)
     def get_daily_trend(token, start_date, end_date, fast_w, slow_w):
         try:
-            # Fetch at least 2*slow_w days of data for stable EMA calculation
-            earlier_start = datetime.combine(start_date - timedelta(days=slow_w*2), datetime.min.time())
+            # Fetch at least 3*slow_w days of data for stable EMA calculation
+            earlier_start = datetime.combine(start_date - timedelta(days=slow_w * 3), datetime.min.time())
             hist_daily = kite.historical_data(token, earlier_start, end_date, interval="day")
             df_daily = pd.DataFrame(hist_daily)
             
@@ -175,10 +175,9 @@ if st.session_state["access_token"]:
             else:
                 return "NEUTRAL"
 
-        except Exception as e:
-            st.error(f"Error fetching/calculating daily trend: {e}")
+        except Exception:
+            # st.error(f"Error fetching/calculating daily trend: {e}") 
             return "ERROR"
-
 
     # ---- Historical Analysis Button (Daily) ----
     if st.button("Run Historical Analysis (Daily Timeframe)"):
@@ -200,9 +199,16 @@ if st.session_state["access_token"]:
                 else:
                     df_hist = calculate_indicators(df_hist, fast_ema_w, slow_ema_w, rsi_w)
                     
+                    # NEW: Add Bullish/Bearish data for historical view
+                    df_hist["Trend"] = np.select(
+                        [df_hist["fast_ma"] > df_hist["slow_ma"], df_hist["fast_ma"] < df_hist["slow_ma"]],
+                        ["BULLISH", "BEARISH"],
+                        default="NEUTRAL"
+                    )
+
                     st.subheader(f"📈 Historical ({symbol}) Candlestick with EMAs & Oscillators")
                     
-                    # Charting logic (omitted for brevity, assume previous correct implementation)
+                    # Charting logic 
                     fig_hist = make_subplots(
                         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
                         row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI")
@@ -225,6 +231,10 @@ if st.session_state["access_token"]:
 
                     fig_hist.update_layout(xaxis_rangeslider_visible=True, height=700)
                     st.plotly_chart(fig_hist, use_container_width=True)
+                    
+                    # Display the historical data tail with the new Trend column
+                    st.subheader("Historical Data Tail (Daily Trend)")
+                    st.dataframe(df_hist[["date", "open", "close", "fast_ma", "slow_ma", "Trend"]].tail(20), use_container_width=True)
 
         except Exception as e:
             st.error(f"Error fetching historical data: {e}")
@@ -234,18 +244,31 @@ if st.session_state["access_token"]:
     if st.button("Start Intraday Bar-Close Analysis"):
         st.session_state["live_running"] = True
         # NEW: Pre-calculate daily trend before starting the loop
-        # Use the start_date from the input fields as the earliest point for daily fetch
-        st.session_state["daily_trend"] = get_daily_trend(
-            token=int(pd.DataFrame(kite.instruments("NSE")).loc[pd.DataFrame(kite.instruments("NSE"))["tradingsymbol"] == symbol].iloc[0]["instrument_token"]),
-            start_date=start_date, 
-            end_date=end_date,
-            fast_w=fast_ema_w,
-            slow_w=slow_ema_w
-        )
-        if st.session_state["daily_trend"] in ["ERROR", "INSUFFICIENT_DATA"]:
-            st.warning(f"⚠️ Daily Trend calculation failed/had insufficient data. Defaulting to NEUTRAL: {st.session_state['daily_trend']}")
-            st.session_state["daily_trend"] = "NEUTRAL"
-        st.success(f"Higher Timeframe (Daily) Trend Calculated: **{st.session_state['daily_trend']}**")
+        try:
+            instruments = kite.instruments("NSE")
+            df_instruments = pd.DataFrame(instruments)
+            row = df_instruments[df_instruments["tradingsymbol"] == symbol]
+            token = int(row.iloc[0]["instrument_token"])
+            
+            st.session_state["daily_trend"] = get_daily_trend(
+                token=token,
+                start_date=start_date, 
+                end_date=end_date,
+                fast_w=fast_ema_w,
+                slow_w=slow_ema_w
+            )
+            daily_trend = st.session_state["daily_trend"]
+
+            if daily_trend in ["ERROR", "INSUFFICIENT_DATA", None]:
+                st.warning(f"⚠️ Daily Trend calculation failed/had insufficient data ({daily_trend}). Defaulting to NEUTRAL.")
+                st.session_state["daily_trend"] = "NEUTRAL"
+                daily_trend = "NEUTRAL"
+            st.success(f"Higher Timeframe (Daily) Trend Calculated: **{daily_trend}**")
+
+        except Exception as e:
+            st.error(f"Error fetching instrument token for daily trend calculation: {e}")
+            st.session_state["live_running"] = False # Stop if we can't get the token
+            st.stop()
 
 
     if st.session_state["live_running"]:
@@ -261,7 +284,15 @@ if st.session_state["access_token"]:
         debug_placeholder = st.sidebar.empty()
 
         # NEW: Fetch Daily Trend from Session State
-        daily_trend = st.session_state["daily_trend"]
+        daily_trend = st.session_state.get("daily_trend", "N/A")
+
+        if daily_trend == "N/A":
+            st.warning("⚠️ Daily Trend not initialized. Please click 'Start Intraday Bar-Close Analysis' first.")
+            st.session_state["live_running"] = False
+            st.stop()
+        
+        # NEW: Display Daily Trend prominently
+        st.info(f"Higher Timeframe (Daily) Trend: **{daily_trend}**")
 
         try:
             instruments = kite.instruments("NSE")
@@ -275,16 +306,13 @@ if st.session_state["access_token"]:
             else:
                 token = int(row.iloc[0]["instrument_token"])
 
-                # NEW: Display Daily Trend prominently
-                st.info(f"Higher Timeframe (Daily) Trend: **{daily_trend}**")
-
 
                 while st.session_state["live_running"]:
                     try:
                         # --- FIX: Set start time to 3 days ago for robust fetching ---
                         today = date.today()
-                        # Go back 3 as the live interval could be 30min, 3 days ensures enough bars
-                        intraday_start = datetime.combine(today - timedelta(days=3), datetime.min.time()) 
+                        # Go back 3 days to safely capture the last trading day's close for indicators.
+                        intraday_start = datetime.combine(today - timedelta(days=3), datetime.min.time())
                         end_time = datetime.now() # Fetch up to the current moment
 
                         
@@ -391,6 +419,9 @@ if st.session_state["access_token"]:
                         # --- NEW: MULTI-TIMEFRAME ANALYSIS (MTFA) FILTER ---
                         mtfa_override = False
                         mtfa_tag = ""
+                        # Store the original trend direction before neutralization
+                        original_bullish = trend_score >= 4 
+                        original_bearish = trend_score <= -4
                         
                         # Intraday Bullish Signal (score > 0) is invalid if Daily is Bearish
                         if score > 0 and daily_trend == "BEARISH":
@@ -404,8 +435,6 @@ if st.session_state["access_token"]:
                             mtfa_override = True
                             mtfa_tag = "Counter-Trend (Daily Bullish)"
 
-                        # Only neutral signals can pass on NEUTRAL Daily trend, but we don't zero it out
-                        
                         # --- END MTFA FILTER ---
                         
                         
@@ -418,7 +447,7 @@ if st.session_state["access_token"]:
                             "SELL" if score > -8 else  
                             "STRONG SELL"            
                         )
-                        
+
                         # Apply MTFA Tag to Recommendation if neutralized
                         if mtfa_override and recommendation == "HOLD/NEUTRAL":
                             recommendation = f"HOLD/NEUTRAL ({mtfa_tag})"
@@ -433,7 +462,8 @@ if st.session_state["access_token"]:
                         # *** END NEW OVERRIDE ***
                         
                         # Apply Technical Safeguard Filtering to the strongest signals (Original Logic)
-                        if not is_overridden and not mtfa_override: # Only apply technical filtering if not already macro/MTFA-overridden
+                        # Only apply technical filtering if not already macro/MTFA-overridden
+                        if not is_overridden and not mtfa_override: 
                             if recommendation in ["STRONG BUY", "BUY"] and score >= 6:
                                 if not is_volume_confirmed and not is_breakout_confirmed:
                                     recommendation = "BUY (Wait for Volume & Breakout)"
@@ -457,10 +487,6 @@ if st.session_state["access_token"]:
                         risk_per_trade = account_size * (risk_percent / 100)
                         stop_distance = latest["atr"] * atr_stop_mult
                         entry_price = current_price_for_breakout # Use the most recent price for position sizing
-                        
-                        # Check the *original* trend direction before MTFA/Override zeroed the score
-                        original_bullish = trend_score >= 4 
-                        original_bearish = trend_score <= -4
                         
                         if not pd.isna(latest["atr"]) and stop_distance > 0:
                             suggested_quantity = int(risk_per_trade / stop_distance)
@@ -599,11 +625,11 @@ if st.session_state["access_token"]:
                             * **Reversion (RSI/BB):** **{reversion_score}** / $\pm 2$
                         """)
                         
-                        if recommendation == "HOLD/NEUTRAL" or "Wait for" in recommendation or "Override" in recommendation or "Counter-Trend" in recommendation:
+                        if recommendation == "HOLD/NEUTRAL" or "Wait for" in recommendation or "Override" in recommendation or "Counter-Trend" in recommendation: # ADDED
                             if "Override" in recommendation:
                                 targets_placeholder.error("🚨 **TRADE CANCELLED:** Macro or Company-Specific Risk Override is **ACTIVE**. Technical signals are ignored.")
-                            elif "Counter-Trend" in recommendation:
-                                targets_placeholder.error(f"🚨 **TRADE CANCELLED:** Intraday signal is **COUNTER-TREND** to the Daily {daily_trend} trend. Low conviction trade.") # ADDED
+                            elif "Counter-Trend" in recommendation: # ADDED
+                                targets_placeholder.error(f"🚨 **TRADE CANCELLED:** Intraday signal is **COUNTER-TREND** to the Daily {daily_trend} trend. Score neutralized to 0.") # ADDED
                             else:
                                 targets_placeholder.warning("Market is balanced or awaiting confirmation. Avoid entry.")
                             
