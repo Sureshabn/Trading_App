@@ -346,17 +346,18 @@ if st.session_state["access_token"]:
                             "STRONG SELL"            
                         )
 
-                        # *** NEW: VOLATILITY FILTER SAFEGURAD ***
+                        # *** NEW: VOLATILITY FILTER SAFEGURAD (FROM PREVIOUS STEP) ***
                         atr_lookback = 50
                         df_atr_history = df_valid["atr"].iloc[-min(atr_lookback, len(df_valid)):-1] 
                         is_low_volatility = False
+                        low_volatility_threshold = 0.0
                         
                         if not df_atr_history.empty:
                             low_volatility_threshold = df_atr_history.quantile(0.20)
                             # Check if current ATR is below the 20th percentile (the low volatility threshold)
                             if latest["atr"] < low_volatility_threshold:
                                 is_low_volatility = True
-                        # *** END NEW VOLATILITY FILTER ***
+                        # *** END VOLATILITY FILTER ***
                         
                         # *** MACRO/FUNDAMENTAL OVERRIDE SAFEGURAD ***
                         is_overridden = False
@@ -390,29 +391,56 @@ if st.session_state["access_token"]:
                                     recommendation = "SELL (No Breakout Yet)"
 
 
-                        # --- RISK MANAGEMENT CALCULATIONS ---
+                        # --- RISK MANAGEMENT CALCULATIONS (Adaptive Position Sizing) ---
                         stop_loss, take_profit = None, None
                         suggested_quantity = 0
-                        risk_per_trade = account_size * (risk_percent / 100)
-                        stop_distance = latest["atr"] * atr_stop_mult
-                        entry_price = current_price_for_breakout # Use the most recent price for position sizing
+                        risk_per_trade = 0.0
                         
-                        if not pd.isna(latest["atr"]) and stop_distance > 0:
-                            suggested_quantity = int(risk_per_trade / stop_distance)
-                            if suggested_quantity < 1: suggested_quantity = 1
+                        # 1. Determine Effective Risk Level
+                        is_full_risk = (
+                            (score >= 6 or score <= -6) and 
+                            is_breakout_confirmed and 
+                            is_volume_confirmed and 
+                            not is_overridden
+                        )
+                        
+                        is_directional_signal = (
+                            recommendation in ["STRONG BUY", "BUY", "SELL", "STRONG SELL"] or 
+                            "Wait for" in recommendation
+                        )
+                        
+                        effective_risk_percent = 0.0
+                        
+                        if is_full_risk:
+                            # Full risk for fully confirmed trades
+                            effective_risk_percent = risk_percent
+                        elif is_directional_signal and not is_overridden:
+                            # Half risk for directional but unconfirmed/downgraded trades, but not cancelled trades
+                            effective_risk_percent = risk_percent / 2
+                        
+                        # 2. Calculate Position Size and SL/TP
+                        
+                        if not pd.isna(latest["atr"]) and effective_risk_percent > 0:
+                            risk_per_trade = account_size * (effective_risk_percent / 100)
+                            stop_distance = latest["atr"] * atr_stop_mult
+                            entry_price = current_price_for_breakout
+                            
+                            if risk_per_trade > 0 and stop_distance > 0:
+                                suggested_quantity = int(risk_per_trade / stop_distance)
+                                if suggested_quantity < 1: suggested_quantity = 1
 
-                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK
-                            if not is_overridden and score >= 6 and is_breakout_confirmed and is_volume_confirmed: 
-                                stop_loss_price = entry_price - stop_distance
-                                take_profit_price = entry_price + (stop_distance * risk_rr)
+                            # Calculate SL/TP only for Full Risk (fully confirmed) trades
+                            if is_full_risk: 
+                                if score >= 6: 
+                                    stop_loss_price = entry_price - stop_distance
+                                    take_profit_price = entry_price + (stop_distance * risk_rr)
+                                elif score <= -6:
+                                    stop_loss_price = entry_price + stop_distance
+                                    take_profit_price = entry_price - (stop_distance * risk_rr)
+
                                 stop_loss = f"{stop_loss_price:.2f}"
                                 take_profit = f"{take_profit_price:.2f}"
-                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK
-                            elif not is_overridden and score <= -6 and is_breakout_confirmed and is_volume_confirmed: 
-                                stop_loss_price = entry_price + stop_distance
-                                take_profit_price = entry_price - (stop_distance * risk_rr)
-                                stop_loss = f"{stop_loss_price:.2f}"
-                                take_profit = f"{take_profit_price:.2f}"
+                        # --- END ADAPTIVE RISK LOGIC ---
 
                         
                         # --- CHART AND DATA OUTPUT ---
@@ -563,15 +591,21 @@ if st.session_state["access_token"]:
                             * **Suggested Take-Profit:** **{take_profit if take_profit else 'N/A'}**
                         """)
                         
-                        if stop_loss and take_profit and not is_overridden:
+                        if is_full_risk:
                             risk_placeholder.markdown(f"""
-                                **Position Sizing (Risk {risk_percent}%):**
+                                **Position Sizing (FULL RISK {effective_risk_percent:.1f}%):**
                                 * **Risk Amount:** ₹ {risk_per_trade:.2f}
                                 * **Stop Distance:** ₹ {stop_distance:.2f}
                                 * **Max Quantity:** **{suggested_quantity}** shares
                             """)
-                        elif is_overridden:
-                             risk_placeholder.markdown("⚠️ **Trade Cancelled:** Risk Management Skipped due to **Override/Low Volatility**.")
+                        elif effective_risk_percent > 0:
+                            risk_placeholder.warning(f"""
+                                **Position Sizing (HALF RISK {effective_risk_percent:.1f}%):**
+                                * **Reason:** Unconfirmed signal (Volume/Breakout missing) or not a STRONG signal.
+                                * **Risk Amount:** ₹ {risk_per_trade:.2f}
+                                * **Stop Distance:** ₹ {stop_distance:.2f}
+                                * **Max Quantity:** **{suggested_quantity}** shares
+                            """)
                         else:
                             risk_placeholder.markdown("⚠️ **Actionable Trade:** Requires a high score ($|\text{Score}| \ge 6$), **Volume Confirmation**, and a **Price Breakout** to calculate actionable targets.")
 
