@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
 import numpy as np
-import pytz # Added for explicit timezone handling (optional but good practice)
+import pytz
 
 # Set the Indian Standard Time (IST) timezone
 IST = pytz.timezone('Asia/Kolkata')
@@ -85,13 +85,28 @@ if st.session_state["access_token"]:
     with colC:
         atr_stop_mult = st.number_input("ATR Stop Multiplier", min_value=1.0, value=2.0, step=0.5)
     
-    colD, colE = st.columns(2)
+    colD, colE, colF, colG = st.columns(4)
     with colD:
         # Volume Confirmation Threshold
-        volume_conf_mult = st.number_input("Volume Confirmation Multiplier (e.g., 1.5x ATR Vol)", min_value=1.0, value=1.5, step=0.1)
+        volume_conf_mult = st.number_input("Volume Conf. Multiplier (e.g., 1.5x ATR Vol)", min_value=1.0, value=1.5, step=0.1)
     with colE:
         # Swing High/Low Lookback
         swing_lookback = st.number_input("Swing Lookback Periods (for S/R)", min_value=5, value=10)
+    
+    # --- NEW SAFEGURAD INPUTS ---
+    with colF:
+        macro_risk_override = st.checkbox(
+            "Apply **Macro/Global Risk Override**",
+            value=False,
+            help="Downgrade signals due to poor Nifty/Global setup or upcoming key data (e.g., Fed/RBI)."
+        )
+    with colG:
+        company_news_override = st.checkbox(
+            f"Apply **{symbol} News Override**",
+            value=False,
+            help=f"Downgrade signals for {symbol} due to company-specific negative news or pending major announcements (e.g., results)."
+        )
+    # --- END NEW SAFEGURAD INPUTS ---
 
 
     start_date = st.date_input("Historical Start Date", datetime(2022,1,1))
@@ -118,11 +133,11 @@ if st.session_state["access_token"]:
         df["fast_ma_slope"] = (df["fast_ma"] - df["fast_ma"].shift(3)) / 3
         
         # RSI, MACD, BB, ATR
-        df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=rsi_w).rsi()
         macd = ta.trend.MACD(df["close"])
         df["macd"] = macd.macd()
         df["macd_signal"] = macd.macd_signal()
         df["macd_hist"] = macd.macd_diff() 
+        df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=rsi_w).rsi()
         boll = ta.volatility.BollingerBands(df["close"])
         df["bb_high"] = boll.bollinger_hband()
         df["bb_low"] = boll.bollinger_lband()
@@ -298,7 +313,7 @@ if st.session_state["access_token"]:
                                 if latest["close"] > latest["bb_high"] and latest["close"] < prev["close"]:
                                     score -= 1; reversion_score -= 1
                                     
-                        # --- SAFEGURADS AND CONFIRMATION LOGIC ---
+                        # --- SAFEGURADS AND CONFIRMATION LOGIC (Technical) ---
                         
                         df_lookback = df_valid.iloc[-swing_lookback-1:-1] # Look at the bars preceding the current bar
                         swing_high = df_lookback["high"].max() if not df_lookback.empty else latest["high"]
@@ -325,28 +340,37 @@ if st.session_state["access_token"]:
                         
                         recommendation = (
                             "STRONG BUY" if score >= 8 else 
-                            "BUY" if score >= 4 else   
+                            "BUY" if score >= 4 else  
                             "HOLD/NEUTRAL" if score > -4 else 
-                            "SELL" if score > -8 else   
-                            "STRONG SELL"                  
+                            "SELL" if score > -8 else  
+                            "STRONG SELL"            
                         )
 
-                        # Apply Safeguard Filtering to the strongest signals
-                        if recommendation in ["STRONG BUY", "BUY"] and score >= 6:
-                            if not is_volume_confirmed and not is_breakout_confirmed:
-                                recommendation = "BUY (Wait for Volume & Breakout)"
-                            elif not is_volume_confirmed:
-                                recommendation = "BUY (Low Volume Confirmation)"
-                            elif not is_breakout_confirmed:
-                                recommendation = "BUY (No Breakout Yet)"
+                        # *** NEW: MACRO/FUNDAMENTAL OVERRIDE SAFEGURAD ***
+                        is_overridden = False
+                        if (macro_risk_override or company_news_override) and recommendation in ["STRONG BUY", "BUY", "STRONG SELL", "SELL"]:
+                            # Downgrade any actionable trade to HOLD
+                            recommendation = "HOLD/NEUTRAL (Macro/News Override)"
+                            is_overridden = True
+                        # *** END NEW OVERRIDE ***
                         
-                        if recommendation in ["STRONG SELL", "SELL"] and score <= -6:
-                            if not is_volume_confirmed and not is_breakout_confirmed:
-                                recommendation = "SELL (Wait for Volume & Breakout)"
-                            elif not is_volume_confirmed:
-                                recommendation = "SELL (Low Volume Confirmation)"
-                            elif not is_breakout_confirmed:
-                                recommendation = "SELL (No Breakout Yet)"
+                        # Apply Technical Safeguard Filtering to the strongest signals (Original Logic)
+                        if not is_overridden: # Only apply technical filtering if not already macro-overridden
+                            if recommendation in ["STRONG BUY", "BUY"] and score >= 6:
+                                if not is_volume_confirmed and not is_breakout_confirmed:
+                                    recommendation = "BUY (Wait for Volume & Breakout)"
+                                elif not is_volume_confirmed:
+                                    recommendation = "BUY (Low Volume Confirmation)"
+                                elif not is_breakout_confirmed:
+                                    recommendation = "BUY (No Breakout Yet)"
+                            
+                            if recommendation in ["STRONG SELL", "SELL"] and score <= -6:
+                                if not is_volume_confirmed and not is_breakout_confirmed:
+                                    recommendation = "SELL (Wait for Volume & Breakout)"
+                                elif not is_volume_confirmed:
+                                    recommendation = "SELL (Low Volume Confirmation)"
+                                elif not is_breakout_confirmed:
+                                    recommendation = "SELL (No Breakout Yet)"
 
 
                         # --- RISK MANAGEMENT CALCULATIONS ---
@@ -360,12 +384,14 @@ if st.session_state["access_token"]:
                             suggested_quantity = int(risk_per_trade / stop_distance)
                             if suggested_quantity < 1: suggested_quantity = 1
 
-                            if score >= 6 and is_breakout_confirmed and is_volume_confirmed: 
+                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK
+                            if not is_overridden and score >= 6 and is_breakout_confirmed and is_volume_confirmed: 
                                 stop_loss_price = entry_price - stop_distance
                                 take_profit_price = entry_price + (stop_distance * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
                                 take_profit = f"{take_profit_price:.2f}"
-                            elif score <= -6 and is_breakout_confirmed and is_volume_confirmed: 
+                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK
+                            elif not is_overridden and score <= -6 and is_breakout_confirmed and is_volume_confirmed: 
                                 stop_loss_price = entry_price + stop_distance
                                 take_profit_price = entry_price - (stop_distance * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
@@ -484,8 +510,11 @@ if st.session_state["access_token"]:
                             * **Reversion (RSI/BB):** **{reversion_score}** / $\pm 2$
                         """)
                         
-                        if recommendation == "HOLD/NEUTRAL" or "Wait for" in recommendation:
-                            targets_placeholder.warning("Market is balanced or awaiting confirmation. Avoid entry.")
+                        if recommendation == "HOLD/NEUTRAL" or "Wait for" in recommendation or "Override" in recommendation:
+                            if "Override" in recommendation:
+                                targets_placeholder.error("🚨 **TRADE CANCELLED:** Macro or Company-Specific Risk Override is **ACTIVE**. Technical signals are ignored.")
+                            else:
+                                targets_placeholder.warning("Market is balanced or awaiting confirmation. Avoid entry.")
                             
                             conflict_col1, conflict_col2 = targets_placeholder.columns(2)
                             
@@ -511,13 +540,15 @@ if st.session_state["access_token"]:
                             * **Suggested Take-Profit:** **{take_profit if take_profit else 'N/A'}**
                         """)
                         
-                        if stop_loss and take_profit:
+                        if stop_loss and take_profit and not is_overridden:
                             risk_placeholder.markdown(f"""
-                                **Position Sizing (1% Risk):**
+                                **Position Sizing (Risk {risk_percent}%):**
                                 * **Risk Amount:** ₹ {risk_per_trade:.2f}
                                 * **Stop Distance:** ₹ {stop_distance:.2f}
                                 * **Max Quantity:** **{suggested_quantity}** shares
                             """)
+                        elif is_overridden:
+                             risk_placeholder.markdown("⚠️ **Trade Cancelled:** Risk Management Skipped due to **Macro/News Override**.")
                         else:
                             risk_placeholder.markdown("⚠️ **Actionable Trade:** Requires a high score ($|\text{Score}| \ge 6$), **Volume Confirmation**, and a **Price Breakout** to calculate actionable targets.")
 
