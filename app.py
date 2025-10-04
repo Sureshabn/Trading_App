@@ -13,7 +13,7 @@ import pytz
 IST = pytz.timezone('Asia/Kolkata')
 
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
-st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V9 - Enhanced Live Safety)")
+st.title("📈 Stock Analysis & Risk Manager")
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
 try:
@@ -631,3 +631,4 @@ if st.session_state["access_token"]:
         except Exception as e:
             st.error(f"Error initializing live analysis: {e}")
             st.session_state["live_running"] = False
+
