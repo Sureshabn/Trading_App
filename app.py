@@ -414,72 +414,85 @@ if st.session_state["access_token"]:
                                 * **HOLD/NEUTRAL:** $|Score| < 4$
                             """)
                         
-                        # Dynamic Score Card - UPDATED WITH NEW ROWS
-                        score_card_placeholder.dataframe(
-                            (pd.DataFrame({
-                                "Component": ["Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)", "Volume Ratio"],
-                                "Current Value": [
-                                    f"{latest['fast_ma']:.2f} / {latest['slow_ma']:.2f}",
-                                    f"{latest['fast_ma_slope']:.4f}",
-                                    f"{latest['macd_hist']:.4f}",
-                                    f"{latest['rsi']:.2f} (BB: {latest['bb_low']:.2f}/{latest['bb_high']:.2f})",
-                                    f"{volume_ratio:.2f}x (ATR Vol: {latest['atr_volume']:.0f})"
-                                ],
-                                "Bullish Met": [
-                                    "✅" if flag_ma_cross_up else "❌",
-                                    "✅" if flag_slope_pos else "❌",
-                                    "✅" if flag_macd_bull else "❌",
-                                    "✅" if flag_rsi_bull or (is_bullish_trend and latest['close'] < latest['bb_low']) else "❌",
-                                    "✅" if is_volume_confirmed else "❌"
-                                ],
-                                "Bearish Met": [
-                                    "✅" if flag_ma_cross_down else "❌",
-                                    "✅" if flag_slope_neg else "❌",
-                                    "✅" if flag_macd_bear else "❌",
-                                    "✅" if flag_rsi_bear or (is_bearish_trend and latest['close'] > latest['bb_high']) else "❌",
-                                    "✅" if is_volume_confirmed else "❌"
-                                ],
-                                "Points": [
-                                    f"{4 if flag_ma_cross_up else (-4 if flag_ma_cross_down else 0)}",
-                                    f"{2 if flag_slope_pos else (-2 if flag_slope_neg else 0)}",
-                                    f"{2 if flag_macd_bull else (-2 if flag_macd_bear else 0)}",
-                                    f"{1 if reversion_score > 0 else (-1 if reversion_score < 0 else 0)}",
-                                    "N/A"
-                                ]
-                            }).set_index("Component") 
-                            # Append 1. Swing S/R (Breakout Confirmation)
-                            .append(pd.DataFrame({
-                                "Component": ["Price vs. Swing S/R (Breakout)"],
-                                "Current Value": [
-                                    f"LTP: {entry_price:.2f} (S/R from {swing_lookback} bars: {swing_high:.2f}/{swing_low:.2f})"
-                                ],
-                                "Bullish Met": [
-                                    "✅" if is_bullish_trend and current_price_for_breakout > swing_high else "❌"
-                                ],
-                                "Bearish Met": [
-                                    "✅" if is_bearish_trend and current_price_for_breakout < swing_low else "❌"
-                                ],
-                                "Points": [
-                                    "N/A (Confirmation Filter)"
-                                ]
-                            }).set_index("Component"))
-                            # Append 2. Macro/News Override Status
-                            .append(pd.DataFrame({
-                                "Component": ["Macro/News Override Status"],
-                                "Current Value": [
-                                    f"Risk Active: {macro_risk_override or company_news_override}"
-                                ],
-                                "Bullish Met": [
-                                    "❌ (Trade Blocked)" if is_overridden else "✅ (Clear)"
-                                ],
-                                "Bearish Met": [
-                                    "❌ (Trade Blocked)" if is_overridden else "✅ (Clear)"
-                                ],
-                                "Points": [
-                                    f"Override Penalty: {-100 if is_overridden else 0}"
-                                ]
-                            }).set_index("Component"))
-                            ), use_container_width=True)
+                        # ----------------------------------------------------
+                        # Dynamic Score Card - FIXED with pd.concat()
+                        # ----------------------------------------------------
+                        
+                        # 1. Main Indicator Scores DataFrame
+                        df_main_scores = pd.DataFrame({
+                            "Component": ["Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)", "Volume Ratio"],
+                            "Current Value": [
+                                f"{latest['fast_ma']:.2f} / {latest['slow_ma']:.2f}",
+                                f"{latest['fast_ma_slope']:.4f}",
+                                f"{latest['macd_hist']:.4f}",
+                                f"{latest['rsi']:.2f} (BB: {latest['bb_low']:.2f}/{latest['bb_high']:.2f})",
+                                f"{volume_ratio:.2f}x (ATR Vol: {latest['atr_volume']:.0f})"
+                            ],
+                            "Bullish Met": [
+                                "✅" if flag_ma_cross_up else "❌",
+                                "✅" if flag_slope_pos else "❌",
+                                "✅" if flag_macd_bull else "❌",
+                                "✅" if flag_rsi_bull or (is_bullish_trend and latest['close'] < latest['bb_low']) else "❌",
+                                "✅" if is_volume_confirmed else "❌"
+                            ],
+                            "Bearish Met": [
+                                "✅" if flag_ma_cross_down else "❌",
+                                "✅" if flag_slope_neg else "❌",
+                                "✅" if flag_macd_bear else "❌",
+                                "✅" if flag_rsi_bear or (is_bearish_trend and latest['close'] > latest['bb_high']) else "❌",
+                                "✅" if is_volume_confirmed else "❌"
+                            ],
+                            "Points": [
+                                f"{4 if flag_ma_cross_up else (-4 if flag_ma_cross_down else 0)}",
+                                f"{2 if flag_slope_pos else (-2 if flag_slope_neg else 0)}",
+                                f"{2 if flag_macd_bull else (-2 if flag_macd_bear else 0)}",
+                                f"{1 if reversion_score > 0 else (-1 if reversion_score < 0 else 0)}",
+                                "N/A"
+                            ]
+                        }).set_index("Component")
+
+                        # 2. Swing S/R (Breakout Confirmation) DataFrame
+                        df_swing = pd.DataFrame({
+                            "Component": ["Price vs. Swing S/R (Breakout)"],
+                            "Current Value": [
+                                f"LTP: {entry_price:.2f} (S/R from {swing_lookback} bars: {swing_high:.2f}/{swing_low:.2f})"
+                            ],
+                            "Bullish Met": [
+                                "✅" if is_bullish_trend and current_price_for_breakout > swing_high else "❌"
+                            ],
+                            "Bearish Met": [
+                                "✅" if is_bearish_trend and current_price_for_breakout < swing_low else "❌"
+                            ],
+                            "Points": [
+                                "N/A (Confirmation Filter)"
+                            ]
+                        }).set_index("Component")
+                        
+                        # 3. Macro/News Override Status DataFrame
+                        df_macro = pd.DataFrame({
+                            "Component": ["Macro/News Override Status"],
+                            "Current Value": [
+                                f"Risk Active: {macro_risk_override or company_news_override}"
+                            ],
+                            "Bullish Met": [
+                                "❌ (Trade Blocked)" if is_overridden else "✅ (Clear)"
+                            ],
+                            "Bearish Met": [
+                                "❌ (Trade Blocked)" if is_overridden else "✅ (Clear)"
+                            ],
+                            "Points": [
+                                f"Override Penalty: {-100 if is_overridden else 0}"
+                            ]
+                        }).set_index("Component")
+
+                        # Concatenate all three DataFrames vertically
+                        df_scorecard_final = pd.concat([df_main_scores, df_swing, df_macro])
+                        
+                        score_card_placeholder.dataframe(df_scorecard_final, use_container_width=True)
+                        
+                        # ----------------------------------------------------
+                        # END FIXED SCORECARD
+                        # ----------------------------------------------------
 
                         # Live Chart (Visualizing SL/TP and S/R)
                         fig_live = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15, row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI"))
