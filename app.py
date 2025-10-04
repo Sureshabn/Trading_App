@@ -396,6 +396,10 @@ if st.session_state["access_token"]:
                         suggested_quantity = 0
                         risk_per_trade = 0.0
                         
+                        # --- FIX: Initialize entry_price here to prevent NameError ---
+                        entry_price = current_price_for_breakout 
+                        # -----------------------------------------------------------
+                        
                         # 1. Determine Effective Risk Level
                         is_full_risk = (
                             (score >= 6 or score <= -6) and 
@@ -423,7 +427,6 @@ if st.session_state["access_token"]:
                         if not pd.isna(latest["atr"]) and effective_risk_percent > 0:
                             risk_per_trade = account_size * (effective_risk_percent / 100)
                             stop_distance = latest["atr"] * atr_stop_mult
-                            entry_price = current_price_for_breakout
                             
                             if risk_per_trade > 0 and stop_distance > 0:
                                 suggested_quantity = int(risk_per_trade / stop_distance)
@@ -548,7 +551,7 @@ if st.session_state["access_token"]:
                         
                         # Display Recommendation and Candle Time
                         rec_placeholder.subheader(f"💡 **{symbol}** Recommendation: **{recommendation}** (Total Score: {score})")
-                        # ADDED: This caption is crucial for diagnosing the delay issue.
+                        # entry_price is now guaranteed to be defined (as current_price_for_breakout)
                         rec_placeholder.caption(f"Calculations based on **{live_interval}** candle closed at: **{latest_candle_time}** (LTP: ₹{entry_price:.2f})")
                         
                         # --- SCORE BREAKDOWN & CONFLICT ANALYSIS ---
