@@ -13,7 +13,7 @@ import pytz
 IST = pytz.timezone('Asia/Kolkata')
 
 st.set_page_config(page_title="Zerodha Stock Analysis", layout="wide")
-st.title("📈 Stock Analysis & Risk Manager")
+st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V9 - Enhanced Live Safety)")
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
 try:
@@ -29,8 +29,6 @@ kite = KiteConnect(api_key=API_KEY)
 if "access_token" not in st.session_state: st.session_state["access_token"] = None
 if "token_date" not in st.session_state: st.session_state["token_date"] = None
 if "live_running" not in st.session_state: st.session_state["live_running"] = False
-# NEW STATE FOR MTFA
-if "long_term_trend" not in st.session_state: st.session_state["long_term_trend"] = "UNKNOWN"
 
 # [ ... Login and token check logic as before ... ]
 if st.session_state["access_token"] and st.session_state["token_date"] == str(date.today()):
@@ -150,44 +148,6 @@ if st.session_state["access_token"]:
 
         return df
 
-    # ======================================================================
-    # ---- NEW: MTFA (Multi-Timeframe Analysis) Function ----
-    # ======================================================================
-    @st.cache_data(ttl=3600) # Cache for 1 hour as daily trend doesn't change quickly
-    # FIX: Prepend with an underscore to prevent Streamlit from hashing the KiteConnect object
-    def get_long_term_trend(_kite_api, token, fast_w, slow_w):
-        """Fetches Daily data and determines the long-term trend based on EMA cross."""
-        try:
-            # Fetch data for the last 150 days (more than enough for 50/20 EMA)
-            start_date = date.today() - timedelta(days=150)
-            end_date = date.today() 
-            
-            # Use the corrected argument name here
-            hist_daily = _kite_api.historical_data(token, start_date, end_date, interval="day")
-            df_daily = pd.DataFrame(hist_daily)
-            
-            if df_daily.empty:
-                return "UNKNOWN"
-
-            # Calculate only the required EMAs
-            df_daily["fast_ma"] = ta.trend.EMAIndicator(df_daily["close"], window=fast_w).ema_indicator()
-            df_daily["slow_ma"] = ta.trend.EMAIndicator(df_daily["close"], window=slow_w).ema_indicator()
-            
-            # Get the latest complete daily candle
-            latest_daily = df_daily.dropna(subset=["fast_ma", "slow_ma"]).iloc[-1]
-            
-            if latest_daily["fast_ma"] > latest_daily["slow_ma"]:
-                return "BULLISH" # Fast EMA > Slow EMA on Daily
-            elif latest_daily["fast_ma"] < latest_daily["slow_ma"]:
-                return "BEARISH" # Fast EMA < Slow EMA on Daily
-            else:
-                return "NEUTRAL"
-                
-        except Exception as e:
-            # st.error(f"Error fetching daily trend: {e}") # Suppress error in the background
-            return "UNKNOWN"
-    # ======================================================================
-
     # ---- Historical Analysis Button (Daily) ----
     if st.button("Run Historical Analysis (Daily Timeframe)"):
         try:
@@ -265,11 +225,7 @@ if st.session_state["access_token"]:
                 st.stop()
             else:
                 token = int(row.iloc[0]["instrument_token"])
-                
-                # --- NEW: Get Long-Term Trend before the loop ---
-                # NOTE: The function call uses 'kite', but the cached function definition uses '_kite_api' 
-                st.session_state["long_term_trend"] = get_long_term_trend(kite, token, fast_ema_w, slow_ema_w)
-                # --- END NEW: Get Long-Term Trend ---
+
 
                 while st.session_state["live_running"]:
                     try:
@@ -390,23 +346,6 @@ if st.session_state["access_token"]:
                             "STRONG SELL"            
                         )
 
-                        # *** NEW: MTFA (Multi-Timeframe) Override Check ***
-                        is_mtfa_conflict = False
-                        if st.session_state["long_term_trend"] == "BEARISH" and score > 0:
-                            # Downgrade bullish signals when daily trend is down (penalty: 5 points)
-                            score = max(0, score - 5) 
-                            if score == 0:
-                                recommendation = "HOLD/NEUTRAL (MTFA Conflict)"
-                                is_mtfa_conflict = True
-                                 
-                        elif st.session_state["long_term_trend"] == "BULLISH" and score < 0:
-                            # Downgrade bearish signals when daily trend is up (penalty: 5 points)
-                            score = min(0, score + 5) 
-                            if score == 0:
-                                recommendation = "HOLD/NEUTRAL (MTFA Conflict)"
-                                is_mtfa_conflict = True
-                        # *** END NEW MTFA ***
-                        
                         # *** NEW: MACRO/FUNDAMENTAL OVERRIDE SAFEGURAD ***
                         is_overridden = False
                         if (macro_risk_override or company_news_override) and recommendation in ["STRONG BUY", "BUY", "STRONG SELL", "SELL"]:
@@ -416,7 +355,7 @@ if st.session_state["access_token"]:
                         # *** END NEW OVERRIDE ***
                         
                         # Apply Technical Safeguard Filtering to the strongest signals (Original Logic)
-                        if not is_overridden and not is_mtfa_conflict: # Only apply technical filtering if not already overridden
+                        if not is_overridden: # Only apply technical filtering if not already macro-overridden
                             if recommendation in ["STRONG BUY", "BUY"] and score >= 6:
                                 if not is_volume_confirmed and not is_breakout_confirmed:
                                     recommendation = "BUY (Wait for Volume & Breakout)"
@@ -445,14 +384,14 @@ if st.session_state["access_token"]:
                             suggested_quantity = int(risk_per_trade / stop_distance)
                             if suggested_quantity < 1: suggested_quantity = 1
 
-                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK AND MTFA CHECK
-                            if not is_overridden and not is_mtfa_conflict and score >= 6 and is_breakout_confirmed and is_volume_confirmed: 
+                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK
+                            if not is_overridden and score >= 6 and is_breakout_confirmed and is_volume_confirmed: 
                                 stop_loss_price = entry_price - stop_distance
                                 take_profit_price = entry_price + (stop_distance * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
                                 take_profit = f"{take_profit_price:.2f}"
-                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK AND MTFA CHECK
-                            elif not is_overridden and not is_mtfa_conflict and score <= -6 and is_breakout_confirmed and is_volume_confirmed: 
+                            # MODIFIED CONDITION to INCLUDE OVERRIDE CHECK
+                            elif not is_overridden and score <= -6 and is_breakout_confirmed and is_volume_confirmed: 
                                 stop_loss_price = entry_price + stop_distance
                                 take_profit_price = entry_price - (stop_distance * risk_rr)
                                 stop_loss = f"{stop_loss_price:.2f}"
@@ -475,42 +414,72 @@ if st.session_state["access_token"]:
                                 * **HOLD/NEUTRAL:** $|Score| < 4$
                             """)
                         
-                        # Dynamic Score Card 
-                        score_card_placeholder.dataframe(pd.DataFrame({
-                            "Component": ["Daily Trend (MTFA Filter)", "Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)", "Volume Ratio"],
-                            "Current Value": [
-                                st.session_state["long_term_trend"], # NEW MTFA Row
-                                f"{latest['fast_ma']:.2f} / {latest['slow_ma']:.2f}",
-                                f"{latest['fast_ma_slope']:.4f}",
-                                f"{latest['macd_hist']:.4f}",
-                                f"{latest['rsi']:.2f} (BB: {latest['bb_low']:.2f}/{latest['bb_high']:.2f})",
-                                f"{volume_ratio:.2f}x (ATR Vol: {latest['atr_volume']:.0f})"
-                            ],
-                            "Bullish Met": [
-                                "✅" if st.session_state["long_term_trend"] == "BULLISH" else "❌", # NEW MTFA Logic
-                                "✅" if flag_ma_cross_up else "❌",
-                                "✅" if flag_slope_pos else "❌",
-                                "✅" if flag_macd_bull else "❌",
-                                "✅" if flag_rsi_bull or (is_bullish_trend and latest['close'] < latest['bb_low']) else "❌",
-                                "✅" if is_volume_confirmed else "❌"
-                            ],
-                            "Bearish Met": [
-                                "✅" if st.session_state["long_term_trend"] == "BEARISH" else "❌", # NEW MTFA Logic
-                                "✅" if flag_ma_cross_down else "❌",
-                                "✅" if flag_slope_neg else "❌",
-                                "✅" if flag_macd_bear else "❌",
-                                "✅" if flag_rsi_bear or (is_bearish_trend and latest['close'] > latest['bb_high']) else "❌",
-                                "✅" if is_volume_confirmed else "❌"
-                            ],
-                            "Points": [
-                                f"Penalty: -5 (if conflict)", # NEW MTFA Logic
-                                f"{4 if flag_ma_cross_up else (-4 if flag_ma_cross_down else 0)}",
-                                f"{2 if flag_slope_pos else (-2 if flag_slope_neg else 0)}",
-                                f"{2 if flag_macd_bull else (-2 if flag_macd_bear else 0)}",
-                                f"{1 if reversion_score > 0 else (-1 if reversion_score < 0 else 0)}",
-                                "N/A"
-                            ]
-                        }).set_index("Component"), use_container_width=True)
+                        # Dynamic Score Card - UPDATED WITH NEW ROWS
+                        score_card_placeholder.dataframe(
+                            (pd.DataFrame({
+                                "Component": ["Fast EMA (Trend)", "EMA Slope (Strength)", "MACD Hist (Momentum)", "RSI/BB (Reversion)", "Volume Ratio"],
+                                "Current Value": [
+                                    f"{latest['fast_ma']:.2f} / {latest['slow_ma']:.2f}",
+                                    f"{latest['fast_ma_slope']:.4f}",
+                                    f"{latest['macd_hist']:.4f}",
+                                    f"{latest['rsi']:.2f} (BB: {latest['bb_low']:.2f}/{latest['bb_high']:.2f})",
+                                    f"{volume_ratio:.2f}x (ATR Vol: {latest['atr_volume']:.0f})"
+                                ],
+                                "Bullish Met": [
+                                    "✅" if flag_ma_cross_up else "❌",
+                                    "✅" if flag_slope_pos else "❌",
+                                    "✅" if flag_macd_bull else "❌",
+                                    "✅" if flag_rsi_bull or (is_bullish_trend and latest['close'] < latest['bb_low']) else "❌",
+                                    "✅" if is_volume_confirmed else "❌"
+                                ],
+                                "Bearish Met": [
+                                    "✅" if flag_ma_cross_down else "❌",
+                                    "✅" if flag_slope_neg else "❌",
+                                    "✅" if flag_macd_bear else "❌",
+                                    "✅" if flag_rsi_bear or (is_bearish_trend and latest['close'] > latest['bb_high']) else "❌",
+                                    "✅" if is_volume_confirmed else "❌"
+                                ],
+                                "Points": [
+                                    f"{4 if flag_ma_cross_up else (-4 if flag_ma_cross_down else 0)}",
+                                    f"{2 if flag_slope_pos else (-2 if flag_slope_neg else 0)}",
+                                    f"{2 if flag_macd_bull else (-2 if flag_macd_bear else 0)}",
+                                    f"{1 if reversion_score > 0 else (-1 if reversion_score < 0 else 0)}",
+                                    "N/A"
+                                ]
+                            }).set_index("Component") 
+                            # Append 1. Swing S/R (Breakout Confirmation)
+                            .append(pd.DataFrame({
+                                "Component": ["Price vs. Swing S/R (Breakout)"],
+                                "Current Value": [
+                                    f"LTP: {entry_price:.2f} (S/R from {swing_lookback} bars: {swing_high:.2f}/{swing_low:.2f})"
+                                ],
+                                "Bullish Met": [
+                                    "✅" if is_bullish_trend and current_price_for_breakout > swing_high else "❌"
+                                ],
+                                "Bearish Met": [
+                                    "✅" if is_bearish_trend and current_price_for_breakout < swing_low else "❌"
+                                ],
+                                "Points": [
+                                    "N/A (Confirmation Filter)"
+                                ]
+                            }).set_index("Component"))
+                            # Append 2. Macro/News Override Status
+                            .append(pd.DataFrame({
+                                "Component": ["Macro/News Override Status"],
+                                "Current Value": [
+                                    f"Risk Active: {macro_risk_override or company_news_override}"
+                                ],
+                                "Bullish Met": [
+                                    "❌ (Trade Blocked)" if is_overridden else "✅ (Clear)"
+                                ],
+                                "Bearish Met": [
+                                    "❌ (Trade Blocked)" if is_overridden else "✅ (Clear)"
+                                ],
+                                "Points": [
+                                    f"Override Penalty: {-100 if is_overridden else 0}"
+                                ]
+                            }).set_index("Component"))
+                            ), use_container_width=True)
 
                         # Live Chart (Visualizing SL/TP and S/R)
                         fig_live = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15, row_heights=[0.7,0.3], subplot_titles=("Price", "MACD & RSI"))
@@ -570,23 +539,20 @@ if st.session_state["access_token"]:
                         # --- SCORE BREAKDOWN & CONFLICT ANALYSIS ---
                         targets_placeholder.markdown(f"""
                             ---
-                            **Score Breakdown:** * **Daily Trend:** **{st.session_state["long_term_trend"]}**
-                            * **Trend (MA/Slope):** **{trend_score}** / $\pm 6$
+                            **Score Breakdown:** * **Trend (MA/Slope):** **{trend_score}** / $\pm 6$
                             * **Momentum (MACD):** **{momentum_score}** / $\pm 2$
                             * **Reversion (RSI/BB):** **{reversion_score}** / $\pm 2$
                         """)
                         
                         if recommendation == "HOLD/NEUTRAL" or "Wait for" in recommendation or "Override" in recommendation:
                             if "Override" in recommendation:
-                                targets_placeholder.error("🚨 **TRADE CANCELLED:** Macro/News or **MTFA Conflict** is **ACTIVE**. Technical signals are ignored.")
+                                targets_placeholder.error("🚨 **TRADE CANCELLED:** Macro or Company-Specific Risk Override is **ACTIVE**. Technical signals are ignored.")
                             else:
                                 targets_placeholder.warning("Market is balanced or awaiting confirmation. Avoid entry.")
                             
                             conflict_col1, conflict_col2 = targets_placeholder.columns(2)
                             
-                            if is_mtfa_conflict:
-                                conflict_col1.markdown(f"🚫 **MAJOR CONFLICT:** Intraday signal conflicts with **Daily Trend ({st.session_state['long_term_trend']})**. Signal neutralized.")
-                            elif abs(trend_score) > 0 and np.sign(trend_score) != np.sign(momentum_score) and abs(momentum_score) > 0:
+                            if abs(trend_score) > 0 and np.sign(trend_score) != np.sign(momentum_score) and abs(momentum_score) > 0:
                                 conflict_col1.markdown("🚫 **CONFLICT:** Trend direction is opposed by Momentum. Wait for alignment.")
                             elif abs(trend_score) < 4 and abs(momentum_score) < 2:
                                 conflict_col1.markdown("📉 **WEAKNESS:** All components are low-scoring. Range-bound market.")
@@ -608,15 +574,15 @@ if st.session_state["access_token"]:
                             * **Suggested Take-Profit:** **{take_profit if take_profit else 'N/A'}**
                         """)
                         
-                        if stop_loss and take_profit and not is_overridden and not is_mtfa_conflict:
+                        if stop_loss and take_profit and not is_overridden:
                             risk_placeholder.markdown(f"""
                                 **Position Sizing (Risk {risk_percent}%):**
                                 * **Risk Amount:** ₹ {risk_per_trade:.2f}
                                 * **Stop Distance:** ₹ {stop_distance:.2f}
                                 * **Max Quantity:** **{suggested_quantity}** shares
                             """)
-                        elif is_overridden or is_mtfa_conflict:
-                             risk_placeholder.markdown("⚠️ **Trade Cancelled:** Risk Management Skipped due to **Macro/News Override** or **MTFA Conflict**.")
+                        elif is_overridden:
+                             risk_placeholder.markdown("⚠️ **Trade Cancelled:** Risk Management Skipped due to **Macro/News Override**.")
                         else:
                             risk_placeholder.markdown("⚠️ **Actionable Trade:** Requires a high score ($|\text{Score}| \ge 6$), **Volume Confirmation**, and a **Price Breakout** to calculate actionable targets.")
 
@@ -631,4 +597,3 @@ if st.session_state["access_token"]:
         except Exception as e:
             st.error(f"Error initializing live analysis: {e}")
             st.session_state["live_running"] = False
-
