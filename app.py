@@ -1,6 +1,6 @@
 import streamlit as st
 from kiteconnect import KiteConnect
-from kiteconnect import KiteTicker  # ADDED: KiteTicker for WebSocket
+from kiteconnect import KiteTicker
 import pandas as pd
 import ta
 from datetime import datetime, date, timedelta
@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 import time
 import numpy as np
 import pytz
-import threading  # ADDED: For running the Ticker in the background
+import threading # For running the Ticker in the background
 
 # Set the Indian Standard Time (IST) timezone
 IST = pytz.timezone('Asia/Kolkata')
@@ -39,6 +39,8 @@ if "ticker_running" not in st.session_state: st.session_state["ticker_running"] 
 if "kws_instance" not in st.session_state: st.session_state["kws_instance"] = None
 if "instrument_token" not in st.session_state: st.session_state["instrument_token"] = None
 if "tradingsymbol" not in st.session_state: st.session_state["tradingsymbol"] = "TCS"
+# NEW STATE FOR THREAD SAFETY (FIX)
+if "state_lock" not in st.session_state: st.session_state["state_lock"] = threading.Lock() 
 
 
 # ----------------------------------------------------------------------
@@ -48,11 +50,14 @@ if "tradingsymbol" not in st.session_state: st.session_state["tradingsymbol"] = 
 def on_ticks(ws, ticks):
     """Callback when ticks are received."""
     # This function runs in the background thread. Access to Streamlit elements is NOT allowed.
-    for tick in ticks:
-        instrument_token = tick.get('instrument_token')
-        if instrument_token:
-            # Safely store the latest tick data in the session state
-            st.session_state["latest_ticks"][instrument_token] = tick
+    # FIX: Acquire lock for thread safety
+    if st.session_state.get("state_lock"):
+        with st.session_state["state_lock"]:
+            for tick in ticks:
+                instrument_token = tick.get('instrument_token')
+                if instrument_token:
+                    # Safely store the latest tick data in the session state
+                    st.session_state["latest_ticks"][instrument_token] = tick
 
 def on_connect(ws, response):
     """Callback on successful connect. Subscribe to tokens here."""
@@ -176,6 +181,12 @@ if st.session_state["access_token"]:
                     st.session_state["instrument_token"] = None
                 else:
                     token = int(row.iloc[0]["instrument_token"])
+
+                    # FIX: Stop the ticker stream if the instrument changes while running
+                    if st.session_state["ticker_running"] and token != st.session_state["instrument_token"]:
+                        stop_ticker_stream()
+                        st.warning(f"Symbol changed from {current_symbol} to {new_symbol}. Ticker stream reset.")
+                        
                     st.session_state["instrument_token"] = token
                     st.session_state["tradingsymbol"] = new_symbol
             except Exception as e:
@@ -788,8 +799,12 @@ if st.session_state["access_token"]:
                 # Streamlit UI loop to read data from the background thread's shared memory
                 while st.session_state["ticker_running"]:
                     
-                    # Check for the specific instrument's tick
-                    latest_tick = st.session_state["latest_ticks"].get(token)
+                    # FIX: Acquire lock for thread safety when reading the shared state
+                    latest_tick = None
+                    if st.session_state.get("state_lock"):
+                        with st.session_state["state_lock"]:
+                            # Check for the specific instrument's tick
+                            latest_tick = st.session_state["latest_ticks"].get(token)
                     
                     if latest_tick:
                         
