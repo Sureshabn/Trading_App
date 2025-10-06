@@ -796,71 +796,75 @@ if st.session_state["access_token"]:
                 
                 live_placeholder = st.empty()
                 
-                # Streamlit UI loop to read data from the background thread's shared memory
-                while st.session_state["ticker_running"]:
+                # --- Streamlit UI loop to read data from the background thread's shared memory ---
+                # NOTE: The previous 'while' loop was removed to prevent blocking the main thread.
                     
-                    # FIX: Acquire lock for thread safety when reading the shared state
-                    latest_tick = None
-                    if st.session_state.get("state_lock"):
-                        with st.session_state["state_lock"]:
-                            # Check for the specific instrument's tick
-                            latest_tick = st.session_state["latest_ticks"].get(token)
+                # FIX: Acquire lock for thread safety when reading the shared state
+                latest_tick = None
+                if st.session_state.get("state_lock"):
+                    with st.session_state["state_lock"]:
+                        # Check for the specific instrument's tick
+                        latest_tick = st.session_state["latest_ticks"].get(token)
+                
+                if latest_tick:
                     
-                    if latest_tick:
+                    # Formatting the tick data for display
+                    ltp = latest_tick.get("last_price", 0)
+                    volume = latest_tick.get("volume", 0)
+                    timestamp_utc = latest_tick.get("exchange_timestamp", 0)
+                    
+                    # Convert to IST for display
+                    timestamp = datetime.fromtimestamp(timestamp_utc).astimezone(IST).strftime("%H:%M:%S.%f")[:-3] if timestamp_utc else "N/A"
+                    
+                    display_data = {
+                        "Trading Symbol": symbol,
+                        "Instrument Token": token,
+                        "Last Traded Price (LTP)": f'₹ {ltp:.2f}',
+                        "Last Traded Quantity (LTQ)": latest_tick.get("last_quantity", 0),
+                        "Volume Traded": f'{volume:,}',
+                        "Timestamp": timestamp,
+                        "Change (%)": f'{latest_tick.get("change", 0):.2f}%',
+                        "Open": latest_tick.get("ohlc", {}).get("open", 0),
+                        "High": latest_tick.get("ohlc", {}).get("high", 0),
+                        "Low": latest_tick.get("ohlc", {}).get("low", 0),
+                        "Close": latest_tick.get("ohlc", {}).get("close", 0)
+                    }
+                    
+                    # Extract Market Depth
+                    depth_table = []
+                    bids = latest_tick.get("depth", {}).get("buy", [])
+                    asks = latest_tick.get("depth", {}).get("sell", [])
+                    
+                    # Ensure both are the same length (max 5)
+                    max_depth = 5
+                    for i in range(max_depth):
+                        bid = bids[i] if i < len(bids) else {"quantity": 0, "price": 0, "orders": 0}
+                        ask = asks[i] if i < len(asks) else {"quantity": 0, "price": 0, "orders": 0}
                         
-                        # Formatting the tick data for display
-                        ltp = latest_tick.get("last_price", 0)
-                        volume = latest_tick.get("volume", 0)
-                        timestamp_utc = latest_tick.get("exchange_timestamp", 0)
-                        
-                        # Convert to IST for display
-                        timestamp = datetime.fromtimestamp(timestamp_utc).astimezone(IST).strftime("%H:%M:%S.%f")[:-3] if timestamp_utc else "N/A"
-                        
-                        display_data = {
-                            "Trading Symbol": symbol,
-                            "Instrument Token": token,
-                            "Last Traded Price (LTP)": f'₹ {ltp:.2f}',
-                            "Last Traded Quantity (LTQ)": latest_tick.get("last_quantity", 0),
-                            "Volume Traded": f'{volume:,}',
-                            "Timestamp": timestamp,
-                            "Change (%)": f'{latest_tick.get("change", 0):.2f}%',
-                            "Open": latest_tick.get("ohlc", {}).get("open", 0),
-                            "High": latest_tick.get("ohlc", {}).get("high", 0),
-                            "Low": latest_tick.get("ohlc", {}).get("low", 0),
-                            "Close": latest_tick.get("ohlc", {}).get("close", 0)
-                        }
-                        
-                        # Extract Market Depth
-                        depth_table = []
-                        bids = latest_tick.get("depth", {}).get("buy", [])
-                        asks = latest_tick.get("depth", {}).get("sell", [])
-                        
-                        # Ensure both are the same length (max 5)
-                        max_depth = 5
-                        for i in range(max_depth):
-                            bid = bids[i] if i < len(bids) else {"quantity": 0, "price": 0, "orders": 0}
-                            ask = asks[i] if i < len(asks) else {"quantity": 0, "price": 0, "orders": 0}
-                            
-                            depth_table.append({
-                                "Bid QTY": bid["quantity"],
-                                "Bid PRICE": bid["price"],
-                                "Ask PRICE": ask["price"],
-                                "Ask QTY": ask["quantity"],
-                            })
+                        depth_table.append({
+                            "Bid QTY": bid["quantity"],
+                            "Bid PRICE": bid["price"],
+                            "Ask PRICE": ask["price"],
+                            "Ask QTY": ask["quantity"],
+                        })
 
-                        # Update the live placeholder
-                        with live_placeholder.container():
-                            st.subheader("Current Live Quote")
-                            st.table(pd.DataFrame([display_data]).T.rename(columns={0: "Value"}))
-                            
-                            st.subheader("Market Depth (5 Levels)")
-                            st.dataframe(pd.DataFrame(depth_table), hide_index=True, use_container_width=True)
+                    # Update the live placeholder
+                    with live_placeholder.container():
+                        st.subheader("Current Live Quote")
+                        st.table(pd.DataFrame([display_data]).T.rename(columns={0: "Value"}))
+                        
+                        st.subheader("Market Depth (5 Levels)")
+                        st.dataframe(pd.DataFrame(depth_table), hide_index=True, use_container_width=True)
 
-                    else:
-                        live_placeholder.info("Waiting for first ticks or connection to be established...")
-
-                    # Poll the shared state every 0.2 seconds (Streamlit UI refresh rate)
-                    time.sleep(0.2) 
+                else:
+                    live_placeholder.info("Waiting for first ticks or connection to be established...")
+                
+                # --- NEW NON-BLOCKING PERIODIC REFRESH ---
+                # This causes the entire script to restart every 0.2s, 
+                # effectively polling the shared session state without blocking the main thread.
+                time.sleep(0.2) 
+                st.rerun()
+                # --- END NEW REFRESH ---
             
             elif st.session_state["kws_instance"] is not None and not st.session_state["ticker_running"]:
                 st.error("Kite Ticker connection closed or failed.")
