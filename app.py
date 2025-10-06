@@ -19,6 +19,7 @@ st.title("📈 Zerodha Stock Analysis & Risk Manager (Pro V9 - Enhanced Live Saf
 
 # ---- Zerodha API credentials from Streamlit Secrets ----
 try:
+    # Ensure you have API_KEY and API_SECRET correctly set in your Streamlit secrets.toml file
     API_KEY = st.secrets["API_KEY"]
     API_SECRET = st.secrets["API_SECRET"]
 except KeyError:
@@ -31,7 +32,6 @@ kite = KiteConnect(api_key=API_KEY)
 if "access_token" not in st.session_state: st.session_state["access_token"] = None
 if "token_date" not in st.session_state: st.session_state["token_date"] = None
 if "live_running" not in st.session_state: st.session_state["live_running"] = False
-# NEW STATE FOR MTFA
 if "long_term_trend" not in st.session_state: st.session_state["long_term_trend"] = "UNKNOWN"
 # NEW STATES FOR LIVE TICKER STREAMING
 if "latest_ticks" not in st.session_state: st.session_state["latest_ticks"] = {}
@@ -39,7 +39,7 @@ if "ticker_running" not in st.session_state: st.session_state["ticker_running"] 
 if "kws_instance" not in st.session_state: st.session_state["kws_instance"] = None
 if "instrument_token" not in st.session_state: st.session_state["instrument_token"] = None
 if "tradingsymbol" not in st.session_state: st.session_state["tradingsymbol"] = "TCS"
-# NEW STATE FOR THREAD SAFETY (FIX)
+# STATE FOR THREAD SAFETY 
 if "state_lock" not in st.session_state: st.session_state["state_lock"] = threading.Lock() 
 
 
@@ -49,15 +49,18 @@ if "state_lock" not in st.session_state: st.session_state["state_lock"] = thread
 
 def on_ticks(ws, ticks):
     """Callback when ticks are received."""
-    # This function runs in the background thread. Access to Streamlit elements is NOT allowed.
-    # FIX: Acquire lock for thread safety
-    if st.session_state.get("state_lock"):
-        with st.session_state["state_lock"]:
-            for tick in ticks:
-                instrument_token = tick.get('instrument_token')
-                if instrument_token:
-                    # Safely store the latest tick data in the session state
-                    st.session_state["latest_ticks"][instrument_token] = tick
+    try:
+        if st.session_state.get("state_lock"):
+            with st.session_state["state_lock"]:
+                for tick in ticks:
+                    instrument_token = tick.get('instrument_token')
+                    if instrument_token:
+                        # Safely store the latest tick data in the session state
+                        st.session_state["latest_ticks"][instrument_token] = tick
+    except Exception as e:
+        # NOTE: This runs in the background thread. We can't use st.error here.
+        # Print to console for debugging the thread.
+        print(f"ERROR in on_ticks: {e}") 
 
 def on_connect(ws, response):
     """Callback on successful connect. Subscribe to tokens here."""
@@ -67,10 +70,12 @@ def on_connect(ws, response):
         ws.subscribe([token])
         # Use full mode for comprehensive data (LTP, depth, etc.)
         ws.set_mode(ws.MODE_FULL, [token]) 
+    else:
+        # If token is None, this is a critical warning for the user
+        print("CRITICAL: Ticker connected but instrument_token is missing, no subscription made.")
         
 def on_close(ws, code, reason):
     """Callback when connection is closed."""
-    # This updates the shared state, which the main Streamlit thread reads
     st.session_state["ticker_running"] = False
     
 def on_error(ws, code, reason):
@@ -86,10 +91,14 @@ def on_reconnect(ws, attempt, delay):
 def initialize_ticker_thread(api_key, access_token):
     """Initializes and runs KiteTicker in a separate thread."""
     
-    # Do not start if already running
     if st.session_state["kws_instance"] and st.session_state["ticker_running"]:
         return True
 
+    # Critical check: Don't start if token is missing
+    if st.session_state.get("instrument_token") is None:
+        st.error("Cannot start Ticker: No valid instrument token found. Check your symbol.")
+        return False
+        
     try:
         kws = KiteTicker(api_key, access_token)
         
@@ -117,6 +126,7 @@ def initialize_ticker_thread(api_key, access_token):
 def stop_ticker_stream():
     """Stops the KiteTicker thread gracefully."""
     if st.session_state["kws_instance"]:
+        # The .close() method will trigger on_close callback, which sets ticker_running to False
         st.session_state["kws_instance"].close()
         # Clean up session state
         st.session_state["kws_instance"] = None
@@ -177,7 +187,7 @@ if st.session_state["access_token"]:
                 row = df_instruments[df_instruments["tradingsymbol"] == new_symbol]
                 
                 if row.empty:
-                    st.error(f"❌ Symbol {new_symbol} not found on NSE.")
+                    st.error(f"❌ Symbol **{new_symbol}** not found on NSE.")
                     st.session_state["instrument_token"] = None
                 else:
                     token = int(row.iloc[0]["instrument_token"])
@@ -316,7 +326,7 @@ if st.session_state["access_token"]:
 
     # ----------------- UI Tabs -----------------
     # SPLIT THE UI INTO TWO TABS
-    tab1, tab2 = st.tabs(["📊 Strategy & Live Analysis (Polling)", "🔴 Live Ticker Stream (WebSocket)"])
+    tab1, tab2 = st.tabs(["📊 Strategy & Bar-Close Analysis (Polling)", "🔴 Live Ticker Stream (WebSocket)"])
 
     # ----------------------------------------------------------------------
     ## 📊 Tab 1: Polling Analysis
@@ -393,8 +403,7 @@ if st.session_state["access_token"]:
                 st.stop()
             else:
                 try:
-                    # --- NEW: Get Long-Term Trend before the loop ---
-                    # NOTE: The function call uses 'kite', but the cached function definition uses '_kite_api' 
+                    # --- Get Long-Term Trend before the loop ---
                     st.session_state["long_term_trend"] = get_long_term_trend(kite, token, fast_ema_w, slow_ema_w)
                     # --- END NEW: Get Long-Term Trend ---
 
@@ -767,7 +776,7 @@ if st.session_state["access_token"]:
         st.header(f"🔴 Real-time Tick Data for {symbol}")
         
         if token is None:
-            st.warning(f"Please enter a valid symbol (e.g., TCS) in the 'Analysis Parameters' section.")
+            st.warning(f"Please log in and enter a valid symbol (e.g., TCS) in the 'Analysis Parameters' section.")
         elif st.session_state["access_token"] and token:
             
             col_start, col_stop, col_spacer = st.columns([1, 1, 4])
@@ -776,7 +785,10 @@ if st.session_state["access_token"]:
             with col_start:
                 if not st.session_state["ticker_running"]:
                     if st.button("Start Ticker Stream"):
-                        if initialize_ticker_thread(API_KEY, st.session_state["access_token"]):
+                        # Re-check token before starting
+                        if st.session_state.get("instrument_token") is None:
+                             st.error("Cannot start Ticker: No valid instrument token found.")
+                        elif initialize_ticker_thread(API_KEY, st.session_state["access_token"]):
                             st.rerun() # Rerun to refresh the UI and start the display loop
                         
             with col_stop:
@@ -785,21 +797,26 @@ if st.session_state["access_token"]:
                         stop_ticker_stream()
                         st.rerun()
 
-            if st.session_state["ticker_running"]:
-                st.success("✅ Kite Ticker connected and streaming in a background thread.")
-            else:
-                st.info("Click 'Start Ticker Stream' to begin receiving live ticks (LTP, Market Depth).")
-
-
-            # 2. Display the live data
+            # 2. Display the live data and Diagnostics
             if st.session_state["ticker_running"]:
                 
+                # --- ENHANCED DIAGNOSTIC CHECK ---
+                kws = st.session_state["kws_instance"]
+                if kws:
+                    if kws.is_connected():
+                        st.success(f"✅ **Kite Ticker is CONNECTED**. Subscribed to Token: **{token}**")
+                        if not st.session_state["latest_ticks"].get(token):
+                            st.warning("Receiving no ticks. Check if the market is open or if the instrument is trading.")
+                    else:
+                        st.error(f"⚠️ **Ticker thread running, but connection FAILED/PENDING** (Status: **{kws.status()}**).")
+                else:
+                    st.error("Internal Error: `kws_instance` is None while `ticker_running` is True.")
+                # --- END DIAGNOSTIC CHECK ---
+
+
                 live_placeholder = st.empty()
                 
-                # --- Streamlit UI loop to read data from the background thread's shared memory ---
-                # NOTE: The previous 'while' loop was removed to prevent blocking the main thread.
-                    
-                # FIX: Acquire lock for thread safety when reading the shared state
+                # Read data from the background thread's shared memory
                 latest_tick = None
                 if st.session_state.get("state_lock"):
                     with st.session_state["state_lock"]:
@@ -859,12 +876,10 @@ if st.session_state["access_token"]:
                 else:
                     live_placeholder.info("Waiting for first ticks or connection to be established...")
                 
-                # --- NEW NON-BLOCKING PERIODIC REFRESH ---
-                # This causes the entire script to restart every 0.2s, 
-                # effectively polling the shared session state without blocking the main thread.
+                # --- NON-BLOCKING PERIODIC REFRESH ---
                 time.sleep(0.2) 
                 st.rerun()
-                # --- END NEW REFRESH ---
+                # --- END NON-BLOCKING PERIODIC REFRESH ---
             
             elif st.session_state["kws_instance"] is not None and not st.session_state["ticker_running"]:
                 st.error("Kite Ticker connection closed or failed.")
